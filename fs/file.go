@@ -10,11 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-type WriterCloserAt interface {
-	io.WriteCloser
-	io.WriterAt
-}
-
 var (
 	_ fs.File        = (*File)(nil)
 	_ WriterCloserAt = (*File)(nil)
@@ -39,7 +34,7 @@ func (f *File) Stat() (fs.FileInfo, error) { return &f.info, nil }
 
 func (f *File) Read(b []byte) (int, error) {
 	if f.reader == nil {
-		if err := f.openAt(io.SeekStart); err != nil {
+		if err := f.openReaderAt(io.SeekStart); err != nil {
 			return 0, err
 		}
 	}
@@ -85,10 +80,10 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		return 0, err
 	}
 
-	return start, f.openAt(start)
+	return start, f.openReaderAt(start)
 }
 
-func (f *File) openAt(offset int64) error {
+func (f *File) openReaderAt(offset int64) error {
 	var streamRange *string
 
 	if offset > 0 {

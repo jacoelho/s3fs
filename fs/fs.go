@@ -1,6 +1,7 @@
 package s3fs
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"io/fs"
@@ -19,7 +20,7 @@ const delimiter = "/"
 var _ fs.FS = (*Fs)(nil)
 
 type Fs struct {
-	client   *s3.Client
+	client   S3ApiClient
 	bucket   string
 	prefix   string
 	timeout  time.Duration
@@ -47,7 +48,7 @@ func (f *Fs) Open(name string) (fs.File, error) {
 		info: info,
 	}
 
-	return file, file.openAt(io.SeekStart)
+	return file, file.openReaderAt(io.SeekStart)
 }
 
 func (f *Fs) stat(name string) (FileInfo, error) {
@@ -104,8 +105,33 @@ func (f *Fs) Create(name string) (*File, error) {
 	return file, err
 }
 
-func (f *Fs) fileWithPrefix(name string) string {
-	return path.Join(f.prefix, name)
+func (f *Fs) CreateDir(name string) (fs.DirEntry, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), f.timeout)
+	defer cancel()
+
+	_, err := f.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(f.bucket),
+		Key:    aws.String(f.fileWithPrefix(name, ".keep")),
+		Body:   bytes.NewReader(nil),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	dir := &Directory{
+		fs: f,
+		fileInfo: FileInfo{
+			name:    name,
+			mode:    fs.ModeDir,
+			modTime: time.Now(),
+		},
+	}
+
+	return dir, nil
+}
+
+func (f *Fs) fileWithPrefix(name ...string) string {
+	return path.Join(append([]string{f.prefix}, name...)...)
 }
 
 func normalizeName(prefix, key string) (string, fs.FileMode) {
