@@ -1,14 +1,12 @@
-module github.com/jacoelho/s3ftp
+module github.com/jacoelho/s3fs
 
-go 1.18
+go 1.19
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.16.7
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.11.20
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.27.1
 	github.com/eikenb/pipeat v0.0.0-20210730190139-06b3e6902001
-	github.com/pkg/sftp v1.13.5
-	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
 )
 
 require (
@@ -22,6 +20,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.8 // indirect
 	github.com/aws/smithy-go v1.12.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
-	github.com/kr/fs v0.1.0 // indirect
 	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e // indirect
 )

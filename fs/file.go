@@ -1,11 +1,10 @@
-package fs
+package s3fs
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -39,9 +38,15 @@ func (f *File) Info() (fs.FileInfo, error) { return f.info.Info() }
 func (f *File) Stat() (fs.FileInfo, error) { return &f.info, nil }
 
 func (f *File) Read(b []byte) (int, error) {
+	if f.reader == nil {
+		if err := f.openAt(io.SeekStart); err != nil {
+			return 0, err
+		}
+	}
+
 	n, err := f.reader.Read(b)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
 
 	f.offset += int64(n)
@@ -92,7 +97,7 @@ func (f *File) openAt(offset int64) error {
 
 	resp, err := f.fs.client.GetObject(context.Background(), &s3.GetObjectInput{
 		Bucket: aws.String(f.fs.bucket),
-		Key:    aws.String(path.Join(f.fs.prefix, f.info.name)),
+		Key:    aws.String(f.fs.fileWithPrefix(f.info.name)),
 		Range:  streamRange,
 	})
 	if err != nil {
@@ -106,10 +111,16 @@ func (f *File) openAt(offset int64) error {
 }
 
 func (f *File) Write(p []byte) (n int, err error) {
+	if f.writer == nil {
+		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
+	}
 	return f.writer.Write(p)
 }
 
 func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
+	if f.writer == nil {
+		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
+	}
 	return f.writer.WriteAt(p, off)
 }
 
@@ -120,14 +131,14 @@ func (f *File) Close() error {
 		}
 	}
 
-	if f.writerCancelFn != nil {
-		f.writerCancelFn()
-	}
-
 	if f.writer != nil {
 		if err := f.writer.Close(); err != nil {
 			return err
 		}
+	}
+
+	if f.writerCancelFn != nil {
+		f.writerCancelFn()
 	}
 
 	return nil

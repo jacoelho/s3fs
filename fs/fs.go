@@ -1,17 +1,20 @@
-package fs
+package s3fs
 
 import (
 	"context"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eikenb/pipeat"
 	"io"
 	"io/fs"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eikenb/pipeat"
 )
+
+const delimiter = "/"
 
 var _ fs.FS = (*Fs)(nil)
 
@@ -23,29 +26,47 @@ type Fs struct {
 	partSize int64
 }
 
+func New(client *s3.Client, bucket string, prefix string) *Fs {
+	return &Fs{
+		client:   client,
+		bucket:   bucket,
+		prefix:   prefix,
+		timeout:  time.Second,
+		partSize: 5 * 1024 * 1024,
+	}
+}
+
 func (f *Fs) Open(name string) (fs.File, error) {
-	file := &File{
-		fs: f,
-		info: FileInfo{
-			name: name,
-		},
+	info, err := f.stat(name)
+	if err != nil {
+		return nil, err
 	}
 
+	file := &File{
+		fs:   f,
+		info: info,
+	}
+
+	return file, file.openAt(io.SeekStart)
+}
+
+func (f *Fs) stat(name string) (FileInfo, error) {
 	ctx, cancelFn := context.WithTimeout(context.Background(), f.timeout)
 	defer cancelFn()
 
 	obj, err := f.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(f.bucket),
-		Key:    aws.String(path.Join(f.prefix, name)),
+		Key:    aws.String(f.fileWithPrefix(name)),
 	})
 	if err != nil {
-		return nil, err
+		return FileInfo{}, err
 	}
 
-	file.info.size = obj.ContentLength
-	file.info.modTime = getOrElse(obj.LastModified, time.Now)
-
-	return file, file.openAt(io.SeekStart)
+	return FileInfo{
+		name:    name,
+		size:    obj.ContentLength,
+		modTime: getOrElse(obj.LastModified, time.Now),
+	}, nil
 }
 
 func (f *Fs) Create(name string) (*File, error) {
@@ -68,7 +89,7 @@ func (f *Fs) Create(name string) (*File, error) {
 			Key:    aws.String(f.fileWithPrefix(name)),
 			Body:   r,
 		})
-		_ = w.CloseWithError(err)
+		_ = r.CloseWithError(err)
 	}()
 
 	file := &File{

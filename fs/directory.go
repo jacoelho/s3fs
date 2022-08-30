@@ -1,4 +1,4 @@
-package fs
+package s3fs
 
 import (
 	"context"
@@ -10,8 +10,6 @@ import (
 )
 
 var _ fs.ReadDirFile = (*Directory)(nil)
-
-const delimiter = "/"
 
 type Directory struct {
 	fs       *Fs

@@ -1,34 +1,20 @@
-package s3ftp
-
-import (
-	"flag"
-	"fmt"
-	"io"
-	"io/ioutil"
-	"log"
-	"net"
-	"os"
-
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
-)
-
-// An example SFTP server implementation using the golang SSH package.
-// Serves the whole filesystem visible to the user, and has a hard-coded username and password,
-// so not for real use!
 package main
 
 import (
-"flag"
-"fmt"
-"io"
-"io/ioutil"
-"log"
-"net"
-"os"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"net"
+	"os"
+	"path"
 
-"github.com/pkg/sftp"
-"golang.org/x/crypto/ssh"
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/jacoelho/s3fs"
 )
 
 // Based on example server code from golang.org/x/crypto/ssh and server_standalone
@@ -42,7 +28,7 @@ func main() {
 	flag.BoolVar(&debugStderr, "e", false, "debug to stderr")
 	flag.Parse()
 
-	debugStream := ioutil.Discard
+	debugStream := io.Discard
 	if debugStderr {
 		debugStream = os.Stderr
 	}
@@ -61,7 +47,7 @@ func main() {
 		},
 	}
 
-	privateBytes, err := ioutil.ReadFile("id_rsa")
+	privateBytes, err := os.ReadFile("id_rsa")
 	if err != nil {
 		log.Fatal("Failed to load private key", err)
 	}
@@ -97,8 +83,6 @@ func main() {
 	// The incoming Request channel must be serviced.
 	go ssh.DiscardRequests(reqs)
 
-	sftp.NewRequestServer()
-
 	// Service the incoming Channel channel.
 	for newChannel := range chans {
 		// Channels have a type, depending on the application level
@@ -132,6 +116,13 @@ func main() {
 				}
 				fmt.Fprintf(debugStream, " - accepted: %v\n", ok)
 				req.Reply(ok, nil)
+
+				root := sftpHandler(&foo{})
+				sftpServer := sftp.NewRequestServer(channel, root)
+				if err := sftpServer.Serve(); err != nil && err != io.EOF {
+					log.Println(err)
+					return
+				}
 			}
 		}(requests)
 
@@ -162,5 +153,106 @@ func main() {
 	}
 }
 
-
 // https://github.com/lambdaxymox/fuchsia/blob/a3fa47a49d96eec82c74c8fc9217f971609dc640/tools/fuzz/ssh_fake.go
+
+func sftpHandler(handler *foo) sftp.Handlers {
+	return sftp.Handlers{
+		FileGet:  handler,
+		FilePut:  handler,
+		FileCmd:  handler,
+		FileList: handler,
+	}
+}
+
+type foo struct {
+	fs *s3fs.Fs
+}
+
+func (f foo) Filelist(request *sftp.Request) (sftp.ListerAt, error) {
+	file, err := f.fs.Open(request.Filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	info, _ := file.Stat()
+
+	switch request.Method {
+	case "Stat":
+		if err != nil {
+			return nil, err
+		}
+		return listerat{info}, nil
+
+	case "List":
+		if !info.IsDir() {
+			return listerat{info}, nil
+		}
+		_ = file.Close()
+		entries, err := fs.ReadDir(f.fs, request.Filepath)
+		if err != nil {
+			return nil, err
+		}
+
+		lst := make(listerat, len(entries))
+		for i := range entries {
+			info, _ := entries[i].Info()
+			lst[i] = info
+		}
+		return lst, nil
+	default:
+		return nil, fmt.Errorf("not support: %v", request.Method)
+	}
+}
+
+func (f foo) Filecmd(request *sftp.Request) error {
+	switch request.Method {
+	case "Mkdir":
+		file, err := f.fs.Create(path.Join(request.Filepath, ".keep"))
+		if err != nil {
+			return err
+		}
+		if _, err := io.WriteString(file, "placeholder"); err != nil {
+			return err
+		}
+
+		return file.Close()
+	default:
+		return fmt.Errorf("not support: %v", request.Method)
+	}
+}
+
+func (f foo) Filewrite(request *sftp.Request) (io.WriterAt, error) {
+	file, err := f.fs.Create(request.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+func (f foo) Fileread(request *sftp.Request) (io.ReaderAt, error) {
+	file, err := f.fs.Open(request.Filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	fileReader, ok := file.(*s3fs.File)
+	if !ok {
+		return nil, errors.New("not expected")
+	}
+
+	return fileReader, nil
+}
+
+type listerat []os.FileInfo
+
+func (f listerat) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+	var n int
+	if offset >= int64(len(f)) {
+		return 0, io.EOF
+	}
+	n = copy(ls, f[offset:])
+	if n < len(ls) {
+		return n, io.EOF
+	}
+	return n, nil
+}
