@@ -7,7 +7,9 @@ import (
 	"io/fs"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/eikenb/pipeat"
 )
 
 var (
@@ -20,8 +22,9 @@ type File struct {
 	fs   *Fs
 	info FileInfo
 
-	reader io.ReadCloser
-	offset int64
+	offset         int64
+	reader         ReaderCloserAt
+	readerCancelFn context.CancelFunc
 
 	writer         WriterCloserAt
 	writerCancelFn context.CancelFunc
@@ -35,9 +38,7 @@ func (f *File) Stat() (fs.FileInfo, error) { return &f.info, nil }
 
 func (f *File) Read(b []byte) (int, error) {
 	if f.reader == nil {
-		if err := f.openReaderAt(io.SeekStart); err != nil {
-			return 0, err
-		}
+		return 0, fmt.Errorf("file not open for reading: %w", fs.ErrClosed)
 	}
 
 	n, err := f.reader.Read(b)
@@ -51,12 +52,10 @@ func (f *File) Read(b []byte) (int, error) {
 }
 
 func (f *File) ReadAt(b []byte, offset int64) (int, error) {
-	_, err := f.Seek(offset, io.SeekStart)
-	if err != nil {
-		return 0, err
+	if f.reader == nil {
+		return 0, fmt.Errorf("file not open for reading: %w", fs.ErrClosed)
 	}
-
-	return f.Read(b)
+	return f.reader.ReadAt(b, offset)
 }
 
 func (f *File) Seek(offset int64, whence int) (int64, error) {
@@ -77,31 +76,50 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		return 0, &fs.PathError{Op: "seek", Path: f.info.name, Err: fs.ErrInvalid}
 	}
 
-	if err := f.reader.Close(); err != nil {
-		return 0, err
-	}
-
 	return start, f.openReaderAt(start)
 }
 
 func (f *File) openReaderAt(offset int64) error {
-	var streamRange *string
-
-	if offset > 0 {
-		streamRange = aws.String(fmt.Sprintf("bytes=%d-", offset))
+	if f.readerCancelFn != nil {
+		f.readerCancelFn()
 	}
 
-	resp, err := f.fs.client.GetObject(context.Background(), &s3.GetObjectInput{
-		Bucket: aws.String(f.fs.bucket),
-		Key:    aws.String(f.fs.withPrefix(f.info.name)),
-		Range:  streamRange,
-	})
+	if f.reader != nil {
+		if err := f.Close(); err != nil {
+			return err
+		}
+	}
+
+	r, w, err := pipeat.PipeInDir("")
 	if err != nil {
 		return err
 	}
 
+	ctx, cancelFn := context.WithCancel(context.Background())
+	downloader := manager.NewDownloader(f.fs.client, func(d *manager.Downloader) {
+		d.Concurrency = 1
+		d.PartSize = f.fs.partSize
+	})
+
+	var streamRange *string
+	if offset > 0 {
+		streamRange = aws.String(fmt.Sprintf("bytes=%d-", offset))
+	}
+
+	go func() {
+		defer cancelFn()
+
+		_, err := downloader.Download(ctx, w, &s3.GetObjectInput{
+			Bucket: aws.String(f.fs.bucket),
+			Key:    aws.String(f.fs.withPrefix(f.Name())),
+			Range:  streamRange,
+		})
+		_ = w.CloseWithError(err)
+	}()
+
 	f.offset = offset
-	f.reader = resp.Body
+	f.reader = r
+	f.readerCancelFn = cancelFn
 
 	return nil
 }
@@ -125,6 +143,10 @@ func (f *File) Close() error {
 		if err := f.reader.Close(); err != nil {
 			return err
 		}
+	}
+
+	if f.readerCancelFn != nil {
+		f.readerCancelFn()
 	}
 
 	if f.writer != nil {

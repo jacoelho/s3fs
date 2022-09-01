@@ -2,6 +2,8 @@ module tests
 
 go 1.19
 
+replace github.com/jacoelho/s3fs => ../fs
+
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78 // indirect
 	github.com/Microsoft/go-winio v0.5.2 // indirect

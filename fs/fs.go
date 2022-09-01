@@ -90,6 +90,9 @@ func (f *Fs) Open(name string) (fs.File, error) {
 		fs:   f,
 		info: info,
 	}
+	if err := file.openReaderAt(0); err != nil {
+		return nil, err
+	}
 
 	return file, nil
 }

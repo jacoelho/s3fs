@@ -62,6 +62,18 @@ func TestDirectoryReadEmpty(t *testing.T) {
 	assert.Equal(t, ".keep", entries[0].Name())
 }
 
+func TestDirectoryReadReturnsAnError(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "some-directory/test.txt", strings.NewReader(""))
+
+	fsClient := s3fs.New(client, "test")
+	dir, err := fsClient.Open("some-directory")
+	require.NoError(t, err)
+
+	_, err = dir.Read(make([]byte, 100))
+	require.Error(t, err)
+}
+
 func TestDirectoryRead(t *testing.T) {
 	createBucket(t, "test")
 

@@ -218,6 +218,15 @@ func sha256sum(t *testing.T, r io.Reader) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+func fileChecksum(t *testing.T, f *os.File) string {
+	t.Helper()
+
+	_, err := f.Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	return sha256sum(t, f)
+}
+
 func objectChecksum(t *testing.T, bucket, path string) string {
 	t.Helper()
 
@@ -230,4 +239,17 @@ func objectChecksum(t *testing.T, bucket, path string) string {
 	defer func() { _ = resp.Body.Close() }()
 
 	return sha256sum(t, resp.Body)
+}
+
+func calculateChunks(fileSize, chunkSize int64) []int {
+	chunks := make([]int, int(fileSize/chunkSize))
+	for i := range chunks {
+		chunks[i] = int(chunkSize)
+	}
+
+	if rem := fileSize % chunkSize; rem > 0 {
+		chunks = append(chunks, int(rem))
+	}
+
+	return chunks
 }

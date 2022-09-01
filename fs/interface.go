@@ -22,3 +22,8 @@ type WriterCloserAt interface {
 	io.WriteCloser
 	io.WriterAt
 }
+
+type ReaderCloserAt interface {
+	io.ReadCloser
+	io.ReaderAt
+}
