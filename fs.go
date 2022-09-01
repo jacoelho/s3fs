@@ -40,24 +40,28 @@ type Fs struct {
 
 type Option func(*Fs)
 
+// WithPrefix defines a common prefix inside a bucket.
 func WithPrefix(prefix string) Option {
 	return func(f *Fs) {
 		f.prefix = strings.TrimPrefix(prefix, delimiter)
 	}
 }
 
+// WithTimeout sets the timeout when interacting with S3.
 func WithTimeout(d time.Duration) Option {
 	return func(f *Fs) {
 		f.timeout = d
 	}
 }
 
+// WithPartSize sets the part size used on multipart download or upload.
 func WithPartSize(size int64) Option {
 	return func(f *Fs) {
 		f.partSize = size
 	}
 }
 
+// New creates a S3 fs abstraction
 func New(client *s3.Client, bucket string, opts ...Option) *Fs {
 	f := &Fs{
 		client:   client,
@@ -73,6 +77,7 @@ func New(client *s3.Client, bucket string, opts ...Option) *Fs {
 	return f
 }
 
+// Open opens the named file or directory for reading.
 func (f *Fs) Open(name string) (fs.File, error) {
 	info, err := f.stat(name)
 	if err != nil {
@@ -97,6 +102,7 @@ func (f *Fs) Open(name string) (fs.File, error) {
 	return file, nil
 }
 
+// stat gets the named file fileinfo using head-object or list-objects (when directory).
 func (f *Fs) stat(name string) (FileInfo, error) {
 	ctx, cancelFn := context.WithTimeout(context.Background(), f.timeout)
 	defer cancelFn()
@@ -142,6 +148,7 @@ func (f *Fs) stat(name string) (FileInfo, error) {
 	return FileInfo{}, ErrKeyNotFound
 }
 
+// Create opens a named file for writing.
 func (f *Fs) Create(name string) (*File, error) {
 	r, w, err := pipeat.PipeInDir("")
 	if err != nil {
@@ -177,6 +184,8 @@ func (f *Fs) Create(name string) (*File, error) {
 	return file, err
 }
 
+// CreateDir creates a name directory
+// Since S3 doesn't have the concept of directories, an empty file .keep is created.
 func (f *Fs) CreateDir(name string) (fs.DirEntry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), f.timeout)
 	defer cancel()
@@ -202,6 +211,8 @@ func (f *Fs) CreateDir(name string) (fs.DirEntry, error) {
 	return dir, nil
 }
 
+// ReadDir reads the named directory
+// and returns a list of directory entries sorted by filename.
 func (f *Fs) ReadDir(dirName string) ([]fs.DirEntry, error) {
 	info, err := f.stat(dirName)
 	if err != nil {

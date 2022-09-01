@@ -15,7 +15,7 @@ import (
 var (
 	_ fs.File        = (*File)(nil)
 	_ fs.DirEntry    = (*File)(nil)
-	_ WriterCloserAt = (*File)(nil)
+	_ writerCloserAt = (*File)(nil)
 )
 
 type File struct {
@@ -23,10 +23,10 @@ type File struct {
 	info FileInfo
 
 	offset         int64
-	reader         ReaderCloserAt
+	reader         readerCloserAt
 	readerCancelFn context.CancelFunc
 
-	writer         WriterCloserAt
+	writer         writerCloserAt
 	writerCancelFn context.CancelFunc
 }
 

@@ -1,1 +1,2 @@
-tests/*.txt
+go.work
+go.work.sum

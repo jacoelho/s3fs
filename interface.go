@@ -18,12 +18,12 @@ type S3ApiClient interface {
 	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 }
 
-type WriterCloserAt interface {
+type writerCloserAt interface {
 	io.WriteCloser
 	io.WriterAt
 }
 
-type ReaderCloserAt interface {
+type readerCloserAt interface {
 	io.ReadCloser
 	io.ReaderAt
 }
