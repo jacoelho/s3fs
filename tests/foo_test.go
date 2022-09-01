@@ -56,7 +56,7 @@ func TestFoo(t *testing.T) {
 	createBucket(t, "test")
 	defer deleteBucket(t, "test")
 
-	fs := s3fs.New(client, "test", "bar")
+	fs := s3fs.New(client, "test")
 
 	f, err := fs.Create("test.txt")
 	if err != nil {
@@ -131,7 +131,7 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs := s3fs.New(client, "test", "bar")
+	fs := s3fs.New(client, "test")
 
 	f, err := fs.Open("test.txt")
 	if err != nil {

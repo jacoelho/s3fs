@@ -12,6 +12,7 @@ import (
 
 var (
 	_ fs.File        = (*File)(nil)
+	_ fs.DirEntry    = (*File)(nil)
 	_ WriterCloserAt = (*File)(nil)
 )
 
@@ -92,7 +93,7 @@ func (f *File) openReaderAt(offset int64) error {
 
 	resp, err := f.fs.client.GetObject(context.Background(), &s3.GetObjectInput{
 		Bucket: aws.String(f.fs.bucket),
-		Key:    aws.String(f.fs.fileWithPrefix(f.info.name)),
+		Key:    aws.String(f.fs.withPrefix(f.info.name)),
 		Range:  streamRange,
 	})
 	if err != nil {
