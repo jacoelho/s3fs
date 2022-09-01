@@ -3,6 +3,7 @@ package tests
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,8 @@ func TestFileRead(t *testing.T) {
 
 	for i, tc := range fileSizes {
 		t.Run(fmt.Sprintf("file size %d", tc), func(t *testing.T) {
+			runtime.GC()
+
 			fileName := fmt.Sprintf("file_read_%0d.txt", i)
 
 			sum := createObjectRandomContentsWithSize(t, "test", fileName, tc)
@@ -176,4 +179,9 @@ func TestFileReadAtWhenFileCreatedFails(t *testing.T) {
 
 	_, err = destination.ReadAt(make([]byte, 100), 0)
 	require.ErrorIs(t, err, os.ErrClosed)
+}
+
+func TestFooBar(t *testing.T) {
+	fsClient := s3fs.New(client, "test")
+	fs.ReadFile(fsClient, "adsad")
 }

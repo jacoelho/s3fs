@@ -6,7 +6,8 @@ DATE  = $(shell date +%Y%m%d%H%M%S)
 
 .PHONY: test
 test:
-	go test -race -shuffle=on -v ./...
+	cd tests; \
+ 	go test -race -shuffle=on -v ./...
 
 .PHONY: ci-tidy
 ci-tidy:
