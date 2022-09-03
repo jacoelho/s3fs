@@ -3,10 +3,10 @@ package tests
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,9 +17,13 @@ import (
 )
 
 // a bit arbitrary value
-const memoryLimit = 20 * 1024 * 1024
+const memoryLimit = 25 * 1024 * 1024
 
 func TestFileRead(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
 	fileSizes := []int64{
 		5 * 1024 * 1024,
 		50 * 1024 * 1024,
@@ -46,12 +50,16 @@ func TestFileRead(t *testing.T) {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
-			assert.True(t, m.Alloc < memoryLimit)
+			assert.Truef(t, m.Alloc < memoryLimit, "got %dmb, want %dmb", m.Alloc/1024/1024, memoryLimit/1024/1024)
 		})
 	}
 }
 
 func TestFileReadChunks(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
 	size := int64(256 * 1024 * 1024)
 	chunkSize := 10 * 1024 * 1024
 
@@ -92,6 +100,10 @@ func TestFileReadChunks(t *testing.T) {
 }
 
 func TestFileWrite(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
 	fileSizes := []int64{
 		5 * 1024 * 1024,
 		50 * 1024 * 1024,
@@ -121,12 +133,16 @@ func TestFileWrite(t *testing.T) {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
-			assert.True(t, m.Alloc < memoryLimit)
+			assert.Truef(t, m.Alloc < memoryLimit, "got %dmb, want %dmb", m.Alloc/1024/1024, memoryLimit/1024/1024)
 		})
 	}
 }
 
 func TestFileWriteChunks(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
 	fileSize := int64(256 * 1024 * 1024)
 	chunkSize := 10 * 1024 * 1024
 	sourceAt, checksumSource := createFileWithSize(t, fileSize)
@@ -181,7 +197,11 @@ func TestFileReadAtWhenFileCreatedFails(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrClosed)
 }
 
-func TestFooBar(t *testing.T) {
+func TestFileCreateExistingDirectory(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
 	fsClient := s3fs.New(client, "test")
-	fs.ReadFile(fsClient, "adsad")
+
+	_, err := fsClient.Create("some-directory/a")
+	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
 }

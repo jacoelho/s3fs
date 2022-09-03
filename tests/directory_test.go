@@ -128,5 +128,15 @@ func TestDirectoryReadIsFile(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	_, err := fs.ReadDir(fsClient, "test.txt")
-	require.ErrorIs(t, err, s3fs.ErrNotDirectory)
+	require.ErrorIs(t, err, s3fs.ErrKeyNotFound)
+}
+
+func TestDirectoryCreateIsFile(t *testing.T) {
+	createBucket(t, "test")
+
+	createObject(t, "test", "test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test")
+
+	_, err := fsClient.CreateDir("test.txt")
+	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
 }

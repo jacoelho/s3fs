@@ -59,6 +59,10 @@ func (f *File) ReadAt(b []byte, offset int64) (int, error) {
 }
 
 func (f *File) Seek(offset int64, whence int) (int64, error) {
+	if f.reader == nil {
+		return 0, fmt.Errorf("seek only supported for reading: %w", fs.ErrClosed)
+	}
+
 	var start int64
 
 	switch whence {
@@ -90,7 +94,7 @@ func (f *File) openReaderAt(offset int64) error {
 		}
 	}
 
-	r, w, err := pipeat.PipeInDir("")
+	r, w, err := pipeat.PipeInDir(f.fs.tempDir)
 	if err != nil {
 		return err
 	}
@@ -120,6 +124,35 @@ func (f *File) openReaderAt(offset int64) error {
 	f.offset = offset
 	f.reader = r
 	f.readerCancelFn = cancelFn
+
+	return nil
+}
+
+func (f *File) openWriter() error {
+	r, w, err := pipeat.PipeInDir(f.fs.tempDir)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	uploader := manager.NewUploader(f.fs.client, func(u *manager.Uploader) {
+		u.Concurrency = 1
+		u.PartSize = f.fs.partSize
+	})
+
+	go func() {
+		defer cancel()
+
+		_, err := uploader.Upload(ctx, &s3.PutObjectInput{
+			Bucket: aws.String(f.fs.bucket),
+			Key:    aws.String(f.fs.withPrefix(f.Name())),
+			Body:   r,
+		})
+		_ = r.CloseWithError(err)
+	}()
+
+	f.writer = w
+	f.writerCancelFn = cancel
 
 	return nil
 }

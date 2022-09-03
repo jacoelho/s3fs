@@ -11,5 +11,6 @@ jobs:
 
       - run: make ci-tidy
       - run: make staticcheck
+      - run: make test-short
       - run: make test
 
