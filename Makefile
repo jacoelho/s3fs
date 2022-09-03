@@ -9,6 +9,11 @@ test:
 	cd tests; \
  	go test -race -shuffle=on -v ./...
 
+.PHONY: test-short
+test-short:
+	cd tests; \
+ 	go test -race -shuffle=on -short -v ./...
+
 .PHONY: ci-tidy
 ci-tidy:
 	go mod tidy
