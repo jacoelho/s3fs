@@ -58,8 +58,19 @@ func TestDirectoryReadEmpty(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "some-directory")
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, ".keep", entries[0].Name())
+	require.Len(t, entries, 0)
+}
+
+func TestDirectoryReadEmptyCustomDirectoryFile(t *testing.T) {
+	createBucket(t, "test")
+
+	fsClient := s3fs.New(client, "test", s3fs.WithDirectoryFile(".dir"))
+	_, err := fsClient.CreateDir("some-directory")
+	require.NoError(t, err)
+
+	entries, err := fs.ReadDir(fsClient, "some-directory")
+	require.NoError(t, err)
+	require.Len(t, entries, 0)
 }
 
 func TestDirectoryReadReturnsAnError(t *testing.T) {
@@ -139,4 +150,24 @@ func TestDirectoryCreateIsFile(t *testing.T) {
 
 	_, err := fsClient.CreateDir("test.txt")
 	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
+}
+
+func TestDirectoryRename(t *testing.T) {
+	createBucket(t, "test")
+
+	createObject(t, "test", "a/test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test")
+
+	err := fsClient.Rename("a", "b")
+	require.ErrorIs(t, err, s3fs.ErrDirectory)
+}
+
+func TestDirectoryRemove(t *testing.T) {
+	createBucket(t, "test")
+
+	createObject(t, "test", "a/test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test")
+
+	err := fsClient.Remove("a")
+	require.ErrorIs(t, err, s3fs.ErrDirectory)
 }

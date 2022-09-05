@@ -80,10 +80,10 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		return 0, &fs.PathError{Op: "seek", Path: f.info.name, Err: fs.ErrInvalid}
 	}
 
-	return start, f.openReaderAt(start)
+	return start, f.openReaderAt(context.Background(), start)
 }
 
-func (f *File) openReaderAt(offset int64) error {
+func (f *File) openReaderAt(ctx context.Context, offset int64) error {
 	if f.readerCancelFn != nil {
 		f.readerCancelFn()
 	}
@@ -99,7 +99,7 @@ func (f *File) openReaderAt(offset int64) error {
 		return err
 	}
 
-	ctx, cancelFn := context.WithCancel(context.Background())
+	ctx, cancelFn := context.WithCancel(ctx)
 	downloader := manager.NewDownloader(f.fs.client, func(d *manager.Downloader) {
 		d.Concurrency = 1
 		d.PartSize = f.fs.partSize
@@ -128,13 +128,13 @@ func (f *File) openReaderAt(offset int64) error {
 	return nil
 }
 
-func (f *File) openWriter() error {
+func (f *File) openWriter(ctx context.Context) error {
 	r, w, err := pipeat.PipeInDir(f.fs.tempDir)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	uploader := manager.NewUploader(f.fs.client, func(u *manager.Uploader) {
 		u.Concurrency = 1
 		u.PartSize = f.fs.partSize
