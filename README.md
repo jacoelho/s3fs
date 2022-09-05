@@ -41,6 +41,17 @@ func main() {
 }
 ```
 
+## Policies
+
+| policy                      | resource                               |
+|-----------------------------|----------------------------------------|
+| s3:ListBucket               | arn:aws:s3:::YOUR_BUCKET               |
+| s3:GetObject                | arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/* |
+| s3:PutObject                | arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/* |
+| s3:DeleteObject             | arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/* |
+| s3:ListMultipartUploadParts | arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/* |
+| s3:AbortMultipartUpload     | arn:aws:s3:::YOUR_BUCKET/YOUR_PREFIX/* |
+
 ## License
 
 MIT License

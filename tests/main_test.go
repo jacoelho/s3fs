@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -180,6 +181,16 @@ func createObject(t *testing.T, bucket, path string, body io.Reader) {
 	}
 }
 
+func assertObjectRemoved(t *testing.T, bucket, path string) {
+	t.Helper()
+
+	_, err := client.HeadObject(context.Background(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(path),
+	})
+	require.True(t, isErrNotFound(err))
+}
+
 func createFileWithSize(t *testing.T, size int64) (*os.File, string) {
 	t.Helper()
 
@@ -252,4 +263,17 @@ func calculateChunks(fileSize, chunkSize int64) []int {
 	}
 
 	return chunks
+}
+
+func isErrNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var re *awshttp.ResponseError
+	if errors.As(err, &re) && re.Response != nil {
+		return re.Response.StatusCode == http.StatusNotFound
+	}
+
+	return false
 }

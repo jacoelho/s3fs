@@ -205,3 +205,37 @@ func TestFileCreateExistingDirectory(t *testing.T) {
 	_, err := fsClient.Create("some-directory/a")
 	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
 }
+
+func TestFileRemove(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
+
+	err := fsClient.Remove("test.txt")
+	require.NoError(t, err)
+	assertObjectRemoved(t, "test", "some-directory/a/test.txt")
+}
+
+func TestFileRename(t *testing.T) {
+	createBucket(t, "test")
+	sourceChecksum := createObjectRandomContentsWithSize(t, "test", "some-directory/a/test.txt", 1024)
+	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
+
+	err := fsClient.Rename("test.txt", "new-test.txt")
+
+	require.NoError(t, err)
+	assertObjectRemoved(t, "test", "some-directory/a/test.txt")
+	destinationChecksum := objectChecksum(t, "test", "some-directory/a/new-test.txt")
+	assert.Equal(t, sourceChecksum, destinationChecksum)
+}
+
+func TestFileRenameDirectory(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
+	_, err := fsClient.CreateDir("b")
+	require.NoError(t, err)
+
+	err = fsClient.Rename("test.txt", "b")
+	require.ErrorIs(t, err, s3fs.ErrDirectory)
+}
