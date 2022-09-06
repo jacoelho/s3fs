@@ -3,7 +3,9 @@ package tests
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -203,7 +205,7 @@ func TestFileCreateExistingDirectory(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	_, err := fsClient.Create("some-directory/a")
-	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
+	require.ErrorIs(t, err, fs.ErrExist)
 }
 
 func TestFileRemove(t *testing.T) {
@@ -238,4 +240,34 @@ func TestFileRenameDirectory(t *testing.T) {
 
 	err = fsClient.Rename("test.txt", "b")
 	require.ErrorIs(t, err, s3fs.ErrDirectory)
+}
+
+func TestFileStatHighNumberInRootDirectory(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	createBucket(t, "test")
+	files := createObjects(t, "test", "", "example", 1000)
+	fsClient := s3fs.New(client, "test")
+
+	info, err := fsClient.Stat(files[len(files)-1])
+
+	require.NoError(t, err)
+	require.Equal(t, path.Base(files[len(files)-1]), info.Name())
+}
+
+func TestFileStatHighNumberInNestedDirectory(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+
+	createBucket(t, "test")
+	files := createObjects(t, "test", "some-directory", "example", 1500)
+	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory"))
+
+	info, err := fsClient.Stat(files[len(files)-1])
+
+	require.NoError(t, err)
+	require.Equal(t, path.Base(files[len(files)-1]), info.Name())
 }

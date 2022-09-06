@@ -37,7 +37,7 @@ func TestDirectoryCreateTwice(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = fsClient.CreateDir("some-directory")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, fs.ErrExist)
 }
 
 func TestDirectoryReadNonExisting(t *testing.T) {
@@ -45,8 +45,9 @@ func TestDirectoryReadNonExisting(t *testing.T) {
 
 	fsClient := s3fs.New(client, "test")
 
-	_, err := fs.ReadDir(fsClient, "some-directory")
-	require.ErrorIs(t, err, s3fs.ErrKeyNotFound)
+	files, err := fs.ReadDir(fsClient, "some-directory")
+	require.NoError(t, err)
+	require.Empty(t, files)
 }
 
 func TestDirectoryReadEmpty(t *testing.T) {
@@ -58,7 +59,9 @@ func TestDirectoryReadEmpty(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "some-directory")
 	require.NoError(t, err)
-	require.Len(t, entries, 0)
+	require.Len(t, entries, 1)
+	require.Equal(t, ".", entries[0].Name())
+	require.True(t, entries[0].IsDir())
 }
 
 func TestDirectoryReadEmptyCustomDirectoryFile(t *testing.T) {
@@ -70,7 +73,9 @@ func TestDirectoryReadEmptyCustomDirectoryFile(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "some-directory")
 	require.NoError(t, err)
-	require.Len(t, entries, 0)
+	require.Len(t, entries, 1)
+	require.Equal(t, ".", entries[0].Name())
+	require.True(t, entries[0].IsDir())
 }
 
 func TestDirectoryReadReturnsAnError(t *testing.T) {
@@ -96,16 +101,36 @@ func TestDirectoryRead(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "some-directory")
 	require.NoError(t, err)
-	require.Len(t, entries, 3)
 
-	assert.Equal(t, "a", entries[0].Name())
-	assert.True(t, entries[0].IsDir())
+	expected := []struct {
+		name  string
+		isDir bool
+	}{
+		{name: ".", isDir: true},
+		{name: "a", isDir: true},
+		{name: "b", isDir: true},
+		{name: "test.txt", isDir: false},
+	}
 
-	assert.Equal(t, "b", entries[1].Name())
-	assert.True(t, entries[1].IsDir())
+	require.Len(t, entries, len(expected))
 
-	assert.Equal(t, "test.txt", entries[2].Name())
-	assert.False(t, entries[2].IsDir())
+	for i, want := range expected {
+		require.Equal(t, want.name, entries[i].Name())
+		require.Equal(t, want.isDir, entries[i].IsDir())
+	}
+}
+
+func TestDirectoryReadCurrent(t *testing.T) {
+	createBucket(t, "test")
+
+	createObject(t, "test", "some-directory/a/b/c/test.txt", strings.NewReader(""))
+	fsClient := s3fs.New(client, "test")
+
+	entries, err := fs.ReadDir(fsClient, ".")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, ".", entries[0].Name())
+	assert.Equal(t, "some-directory", entries[1].Name())
 }
 
 func TestDirectoryReadNestedObject(t *testing.T) {
@@ -116,8 +141,9 @@ func TestDirectoryReadNestedObject(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "some-directory/a/b/c")
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "test.txt", entries[0].Name())
+	require.Len(t, entries, 2)
+	assert.Equal(t, ".", entries[0].Name())
+	assert.Equal(t, "test.txt", entries[1].Name())
 }
 
 func TestDirectoryReadNestedObjectWithPrefix(t *testing.T) {
@@ -128,8 +154,9 @@ func TestDirectoryReadNestedObjectWithPrefix(t *testing.T) {
 
 	entries, err := fs.ReadDir(fsClient, "c")
 	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "test.txt", entries[0].Name())
+	require.Len(t, entries, 2)
+	assert.Equal(t, ".", entries[0].Name())
+	assert.Equal(t, "test.txt", entries[1].Name())
 }
 
 func TestDirectoryReadIsFile(t *testing.T) {
@@ -139,7 +166,7 @@ func TestDirectoryReadIsFile(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	_, err := fs.ReadDir(fsClient, "test.txt")
-	require.ErrorIs(t, err, s3fs.ErrKeyNotFound)
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestDirectoryCreateIsFile(t *testing.T) {
@@ -149,7 +176,7 @@ func TestDirectoryCreateIsFile(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	_, err := fsClient.CreateDir("test.txt")
-	require.ErrorIs(t, err, s3fs.ErrKeyAlreadyExists)
+	require.ErrorIs(t, err, fs.ErrExist)
 }
 
 func TestDirectoryRename(t *testing.T) {
@@ -170,4 +197,80 @@ func TestDirectoryRemove(t *testing.T) {
 
 	err := fsClient.Remove("a")
 	require.ErrorIs(t, err, s3fs.ErrDirectory)
+}
+
+func TestDirectoryCreatedNestedCanBeListed(t *testing.T) {
+	createBucket(t, "test")
+
+	fsClient := s3fs.New(client, "test")
+
+	_, err := fsClient.CreateDir("/a/b/c/d/e")
+	require.NoError(t, err)
+
+	entries, err := fsClient.ReadDir("a/b/c/d/")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, ".", entries[0].Name())
+	require.True(t, entries[0].IsDir())
+	require.Equal(t, "e", entries[1].Name())
+	require.True(t, entries[1].IsDir())
+}
+
+func TestDirectoryCreatedNestedCanBeStat(t *testing.T) {
+	createBucket(t, "test")
+
+	fsClient := s3fs.New(client, "test")
+
+	_, err := fsClient.CreateDir("/a/b/c/d/e")
+	require.NoError(t, err)
+
+	entries, err := fsClient.ReadDir("a/b/c/d/e")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, ".", entries[0].Name())
+	require.True(t, entries[0].IsDir())
+}
+
+func TestDirectoryRemoveDir(t *testing.T) {
+	createBucket(t, "test")
+
+	fsClient := s3fs.New(client, "test")
+
+	_, err := fsClient.CreateDir("a")
+	require.NoError(t, err)
+
+	err = fsClient.RemoveDir("a")
+	require.NoError(t, err)
+}
+
+func TestDirectoryRemoveDirNested(t *testing.T) {
+	createBucket(t, "test")
+
+	fsClient := s3fs.New(client, "test")
+
+	_, err := fsClient.CreateDir("a/b/c/d")
+	require.NoError(t, err)
+
+	err = fsClient.RemoveDir("a/b/c/d")
+	require.NoError(t, err)
+}
+
+func TestDirectoryRemoveDirNotEmpty(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "a/test.txt", strings.NewReader(""))
+
+	fsClient := s3fs.New(client, "test")
+
+	err := fsClient.RemoveDir("a")
+	require.ErrorIs(t, err, fs.ErrInvalid)
+}
+
+func TestDirectoryRemoveDirFile(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "a/test.txt", strings.NewReader(""))
+
+	fsClient := s3fs.New(client, "test")
+
+	err := fsClient.RemoveDir("a/test.txt")
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }

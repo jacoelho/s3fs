@@ -7,14 +7,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/aws/smithy-go/logging"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -30,13 +35,18 @@ const portEdge = "4566/tcp"
 
 var client *s3.Client
 
+var debug = flag.Bool("debug", false, "debug mode.")
+
 func TestMain(m *testing.M) {
+	flag.Parse()
+
 	pool, err := dockertest.NewPool("")
 	if err != nil {
 		log.Fatalf("Could not connect to docker: %v", err)
 	}
 
 	resource, err := pool.Run("localstack/localstack", "", []string{
+		"DISABLE_EVENTS=1",
 		"EAGER_SERVICE_LOADING=1",
 		"SERVICES=s3",
 	})
@@ -79,7 +89,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not connect to localstack: %v", err)
 	}
 
-	cfg, err := config.LoadDefaultConfig(context.Background(),
+	opts := []func(*config.LoadOptions) error{
 		config.WithRegion("us-east-1"),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("foobar", "foobar", "foobar")),
 		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
@@ -88,7 +98,16 @@ func TestMain(m *testing.M) {
 				PartitionID:   "aws",
 				SigningRegion: "us-east-1",
 			}, nil
-		})))
+		})),
+	}
+
+	if *debug {
+		opts = append(opts,
+			config.WithLogger(logging.NewStandardLogger(os.Stdout)),
+			config.WithClientLogMode(aws.LogRequest))
+	}
+
+	cfg, err := config.LoadDefaultConfig(context.Background(), opts...)
 	if err != nil {
 		log.Fatalf("Could not create config: %v", err)
 	}
@@ -179,6 +198,29 @@ func createObject(t *testing.T, bucket, path string, body io.Reader) {
 	if err != nil {
 		t.Fatalf("failed to create object: %v", err)
 	}
+}
+
+func createObjects(t *testing.T, bucket, dirName, filePrefix string, count int) []string {
+	t.Helper()
+
+	result := make([]string, count)
+
+	for i := 0; i < count; i++ {
+		fileName := fmt.Sprintf("%s_%000000d.txt", filePrefix, i)
+
+		_, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(path.Join(dirName, fileName)),
+			Body:   strings.NewReader("data"),
+		})
+		if err != nil {
+			t.Fatalf("failed to create object: %v", err)
+		}
+
+		result[i] = fileName
+	}
+
+	return result
 }
 
 func assertObjectRemoved(t *testing.T, bucket, path string) {
