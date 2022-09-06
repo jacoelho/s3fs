@@ -157,6 +157,7 @@ func (f *File) openWriter(ctx context.Context) error {
 	return nil
 }
 
+// Write implements io.Writer interface.
 func (f *File) Write(p []byte) (n int, err error) {
 	if f.writer == nil {
 		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
@@ -164,6 +165,7 @@ func (f *File) Write(p []byte) (n int, err error) {
 	return f.writer.Write(p)
 }
 
+// WriteAt implements io.WriterAt interface.
 func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 	if f.writer == nil {
 		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
@@ -171,6 +173,7 @@ func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
 	return f.writer.WriteAt(p, off)
 }
 
+// Close implements io.Closer interface.
 func (f *File) Close() error {
 	if f.reader != nil {
 		if err := f.reader.Close(); err != nil {

@@ -6,32 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/http"
 	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 const (
 	delimiter     = "/"
+	currentDir    = "."
 	directoryFile = ".keep"
 	minPartSize   = 5 * 1024 * 1024
 )
 
 var (
-	ErrKeyNotFound      = errors.New("key not found")
-	ErrDirectory        = errors.New("object is a directory")
-	ErrKeyAlreadyExists = errors.New("object already exists")
-)
-
-var (
 	_ fs.FS        = (*Fs)(nil)
 	_ fs.ReadDirFS = (*Fs)(nil)
+
+	ErrDirectory = errors.New("object is a directory")
 )
 
 type Fs struct {
@@ -49,7 +44,9 @@ type Option func(*Fs)
 // WithPrefix defines a common prefix inside a bucket.
 func WithPrefix(prefix string) Option {
 	return func(f *Fs) {
-		f.prefix = strings.Trim(prefix, delimiter)
+		if s := cleanPath(prefix); s != "" {
+			f.prefix = strings.Trim(s, delimiter)
+		}
 	}
 }
 
@@ -109,32 +106,23 @@ func (f *Fs) Open(name string) (fs.File, error) {
 
 // OpenWithContext opens the named file or directory for reading.
 func (f *Fs) OpenWithContext(ctx context.Context, name string) (fs.File, error) {
-	info, err := f.statObject(ctx, name)
+	info, err := f.StatWithContext(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 
-	if info != nil {
-		file := &File{
-			fs:   f,
-			info: *info,
-		}
-		return file, file.openReaderAt(ctx, 0)
+	if info.IsDir() {
+		return &Directory{
+			fs:       f,
+			fileInfo: info,
+		}, nil
 	}
 
-	info, err = f.statDirectory(ctx, name)
-	if err != nil {
-		return nil, err
+	file := &File{
+		fs:   f,
+		info: info,
 	}
-
-	if info == nil {
-		return nil, ErrKeyNotFound
-	}
-
-	return &Directory{
-		fs:       f,
-		fileInfo: *info,
-	}, nil
+	return file, file.openReaderAt(ctx, 0)
 }
 
 // Stat returns a FileInfo describing the named file.
@@ -144,57 +132,18 @@ func (f *Fs) Stat(name string) (FileInfo, error) {
 
 // StatWithContext returns a FileInfo describing the named file.
 func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error) {
-	fileInfo, err := f.statObject(ctx, name)
-	if err != nil {
-		return FileInfo{}, err
-	}
-	if fileInfo != nil {
-		return *fileInfo, nil
-	}
-
-	dirInfo, err := f.statDirectory(ctx, name)
-	if err != nil {
-		return FileInfo{}, err
+	// "." and "/" are always directories
+	if cleanPath(name) == "" {
+		return FileInfo{
+			name:    currentDir,
+			mode:    fs.ModeDir,
+			modTime: time.Now(),
+		}, nil
 	}
 
-	if dirInfo != nil {
-		return *dirInfo, nil
-	}
-
-	return FileInfo{}, ErrKeyNotFound
-}
-
-// statObject gets the named file fileinfo using head-object
-func (f *Fs) statObject(ctx context.Context, name string) (*FileInfo, error) {
-	if f.timeout > 0 {
-		var cancelFn context.CancelFunc
-		ctx, cancelFn = context.WithTimeout(ctx, f.timeout)
-		defer cancelFn()
-	}
-
-	obj, err := f.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(f.bucket),
-		Key:    aws.String(f.withPrefix(name)),
-	})
-	if err != nil {
-		if isErrNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	return &FileInfo{
-		name:    name,
-		size:    obj.ContentLength,
-		modTime: getOrElse(obj.LastModified, time.Now),
-	}, nil
-}
-
-// stat gets the name fileinfo using list-objects
-func (f *Fs) statDirectory(ctx context.Context, name string) (*FileInfo, error) {
 	opts := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(f.bucket),
-		Prefix:    aws.String(f.withPrefix(name) + "/"),
+		Prefix:    aws.String(f.withPrefix(name)),
 		Delimiter: aws.String(delimiter),
 		MaxKeys:   1,
 	}
@@ -207,18 +156,33 @@ func (f *Fs) statDirectory(ctx context.Context, name string) (*FileInfo, error) 
 
 	res, err := f.client.ListObjectsV2(ctx, opts)
 	if err != nil {
-		return nil, err
+		return FileInfo{}, err
 	}
 
-	if res.KeyCount == 0 {
-		return nil, nil
+	prefixedName := f.withPrefix(name)
+
+	for _, el := range res.CommonPrefixes {
+		if *el.Prefix == prefixedName+delimiter {
+			return FileInfo{
+				name:    cleanPath(name),
+				size:    0,
+				mode:    fs.ModeDir,
+				modTime: time.Now(),
+			}, nil
+		}
 	}
 
-	return &FileInfo{
-		name:    name,
-		mode:    fs.ModeDir,
-		modTime: time.Now(),
-	}, nil
+	for _, el := range res.Contents {
+		if *el.Key == prefixedName {
+			return FileInfo{
+				name:    cleanPath(name),
+				size:    el.Size,
+				modTime: getOrElse(el.LastModified, time.Now),
+			}, nil
+		}
+	}
+
+	return FileInfo{}, fs.ErrNotExist
 }
 
 // Create opens a named file for writing.
@@ -228,19 +192,19 @@ func (f *Fs) Create(name string) (*File, error) {
 
 // CreateWithContext opens a named file for writing.
 func (f *Fs) CreateWithContext(ctx context.Context, name string) (*File, error) {
-	info, err := f.statDirectory(ctx, name)
-	if err != nil {
+	info, err := f.StatWithContext(ctx, name)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 
-	if info != nil && info.IsDir() {
-		return nil, fmt.Errorf("named file is a directory: %w", ErrKeyAlreadyExists)
+	if info.IsDir() {
+		return nil, fmt.Errorf("named file is a directory: %w", fs.ErrExist)
 	}
 
 	file := &File{
 		fs: f,
 		info: FileInfo{
-			name: name,
+			name: cleanPath(name),
 		},
 	}
 
@@ -256,13 +220,17 @@ func (f *Fs) CreateDir(name string) (fs.DirEntry, error) {
 // CreateDirWithContext creates a name directory
 // Since S3 doesn't have the concept of directories, an empty file .keep is created.
 func (f *Fs) CreateDirWithContext(ctx context.Context, name string) (fs.DirEntry, error) {
-	info, err := f.statObject(ctx, name)
-	if err != nil {
+	info, err := f.StatWithContext(ctx, name)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 
-	if info != nil {
-		return nil, fmt.Errorf("a file with the same name already exists: %w", ErrKeyAlreadyExists)
+	if err == nil && !info.IsDir() {
+		return nil, fmt.Errorf("a file with the same name already exists: %w", fs.ErrExist)
+	}
+
+	if info.IsDir() {
+		return nil, fmt.Errorf("a directory with the same name already exists: %w", fs.ErrExist)
 	}
 
 	if f.timeout > 0 {
@@ -283,7 +251,7 @@ func (f *Fs) CreateDirWithContext(ctx context.Context, name string) (fs.DirEntry
 	dir := &Directory{
 		fs: f,
 		fileInfo: FileInfo{
-			name:    name,
+			name:    cleanPath(name),
 			mode:    fs.ModeDir,
 			modTime: time.Now(),
 		},
@@ -301,12 +269,18 @@ func (f *Fs) ReadDir(dirName string) ([]fs.DirEntry, error) {
 // ReadDirWithContext reads the named directory
 // and returns a list of directory entries sorted by filename.
 func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEntry, error) {
-	info, err := f.statDirectory(ctx, dirName)
+	dirName = cleanPath(dirName)
+
+	info, err := f.StatWithContext(ctx, dirName)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []fs.DirEntry{}, nil
+		}
 		return nil, err
 	}
-	if info == nil {
-		return nil, ErrKeyNotFound
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("cannot list a file: %w", fs.ErrInvalid)
 	}
 
 	opts := &s3.ListObjectsV2Input{
@@ -315,14 +289,27 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 		Delimiter: aws.String(delimiter),
 	}
 
+	if dirName == "" {
+		opts.Prefix = nil
+	}
+
 	seenPrefixes := map[string]struct{}{
 		".":       {},
 		delimiter: {},
-		dirName:   {},
 	}
 
 	paginator := s3.NewListObjectsV2Paginator(f.client, opts)
-	var result []fs.DirEntry
+
+	result := []fs.DirEntry{
+		&Directory{
+			fs: f,
+			fileInfo: FileInfo{
+				name:    currentDir,
+				mode:    fs.ModeDir,
+				modTime: time.Now(),
+			},
+		},
+	}
 
 	for paginator.HasMorePages() {
 		var cancelFn context.CancelFunc
@@ -403,12 +390,15 @@ func (f *Fs) Remove(filename string) error {
 
 // RemoveWithContext removes the named file.
 func (f *Fs) RemoveWithContext(ctx context.Context, fileName string) error {
-	info, err := f.statDirectory(ctx, fileName)
+	info, err := f.StatWithContext(ctx, fileName)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 
-	if info != nil && info.IsDir() {
+	if info.IsDir() {
 		return ErrDirectory
 	}
 
@@ -443,12 +433,12 @@ func (f *Fs) RenameWithContext(ctx context.Context, oldpath, newpath string) err
 		return fmt.Errorf("oldpath is a directory: %w", ErrDirectory)
 	}
 
-	newInfo, err := f.statDirectory(ctx, newpath)
-	if err != nil {
+	newInfo, err := f.StatWithContext(ctx, newpath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 
-	if newInfo != nil && newInfo.IsDir() {
+	if newInfo.IsDir() {
 		return fmt.Errorf("newpath is a directory: %w", ErrDirectory)
 	}
 
@@ -470,12 +460,39 @@ func (f *Fs) RenameWithContext(ctx context.Context, oldpath, newpath string) err
 	return f.RemoveWithContext(ctx, oldpath)
 }
 
+// RemoveDir removes an empty directory.
+func (f *Fs) RemoveDir(name string) error {
+	return f.RemoveDirWithContext(context.Background(), name)
+}
+
+// RemoveDirWithContext removes an empty directory.
+func (f *Fs) RemoveDirWithContext(ctx context.Context, name string) error {
+	entries, err := f.ReadDirWithContext(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	if len(entries) == 1 && entries[0].Name() == currentDir {
+		return f.Remove(path.Join(name, f.directoryFile))
+	}
+
+	return fmt.Errorf("directory not empty: %w", fs.ErrInvalid)
+}
+
 func (f *Fs) withPrefix(name ...string) string {
 	p := path.Join(append([]string{f.prefix}, name...)...)
-	if p == "." {
+
+	return cleanPath(p)
+}
+
+func cleanPath(name string) string {
+	name = path.Clean(name)
+
+	if name == "." || name == delimiter {
 		return ""
 	}
-	return p
+
+	return strings.TrimLeft(name, delimiter)
 }
 
 func baseName(name string) (string, fs.FileMode) {
@@ -493,17 +510,4 @@ func getOrElse[T any](v *T, fallback func() T) T {
 		return fallback()
 	}
 	return *v
-}
-
-func isErrNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var re *awshttp.ResponseError
-	if errors.As(err, &re) && re.Response != nil {
-		return re.Response.StatusCode == http.StatusNotFound
-	}
-
-	return false
 }
