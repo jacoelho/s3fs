@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/http"
 	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -134,7 +132,7 @@ func (f *Fs) Stat(name string) (FileInfo, error) {
 
 // StatWithContext returns a FileInfo describing the named file.
 func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error) {
-	// to simplify consider /
+	// "." and "/" are always directories
 	if cleanPath(name) == "" {
 		return FileInfo{
 			name:    currentDir,
@@ -166,7 +164,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 	for _, el := range res.CommonPrefixes {
 		if *el.Prefix == prefixedName+delimiter {
 			return FileInfo{
-				name:    name,
+				name:    cleanPath(name),
 				size:    0,
 				mode:    fs.ModeDir,
 				modTime: time.Now(),
@@ -177,7 +175,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 	for _, el := range res.Contents {
 		if *el.Key == prefixedName {
 			return FileInfo{
-				name:    name,
+				name:    cleanPath(name),
 				size:    el.Size,
 				modTime: getOrElse(el.LastModified, time.Now),
 			}, nil
@@ -206,7 +204,7 @@ func (f *Fs) CreateWithContext(ctx context.Context, name string) (*File, error) 
 	file := &File{
 		fs: f,
 		info: FileInfo{
-			name: name,
+			name: cleanPath(name),
 		},
 	}
 
@@ -253,7 +251,7 @@ func (f *Fs) CreateDirWithContext(ctx context.Context, name string) (fs.DirEntry
 	dir := &Directory{
 		fs: f,
 		fileInfo: FileInfo{
-			name:    name,
+			name:    cleanPath(name),
 			mode:    fs.ModeDir,
 			modTime: time.Now(),
 		},
@@ -462,10 +460,12 @@ func (f *Fs) RenameWithContext(ctx context.Context, oldpath, newpath string) err
 	return f.RemoveWithContext(ctx, oldpath)
 }
 
+// RemoveDir removes an empty directory.
 func (f *Fs) RemoveDir(name string) error {
 	return f.RemoveDirWithContext(context.Background(), name)
 }
 
+// RemoveDirWithContext removes an empty directory.
 func (f *Fs) RemoveDirWithContext(ctx context.Context, name string) error {
 	entries, err := f.ReadDirWithContext(ctx, name)
 	if err != nil {
@@ -510,17 +510,4 @@ func getOrElse[T any](v *T, fallback func() T) T {
 		return fallback()
 	}
 	return *v
-}
-
-func isErrNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var re *awshttp.ResponseError
-	if errors.As(err, &re) && re.Response != nil {
-		return re.Response.StatusCode == http.StatusNotFound
-	}
-
-	return false
 }
