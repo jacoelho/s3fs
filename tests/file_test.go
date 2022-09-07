@@ -239,7 +239,7 @@ func TestFileRenameDirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	err = fsClient.Rename("test.txt", "b")
-	require.ErrorIs(t, err, s3fs.ErrDirectory)
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestFileStatHighNumberInRootDirectory(t *testing.T) {
