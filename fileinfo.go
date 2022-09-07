@@ -12,6 +12,23 @@ type FileInfo struct {
 	modTime time.Time
 }
 
+func directoryFileInfo(name string) FileInfo {
+	return FileInfo{
+		name:    name,
+		mode:    0o755 | fs.ModeDir,
+		modTime: time.Now(),
+	}
+}
+
+func regularFileInfo(name string, size int64, modTime time.Time) FileInfo {
+	return FileInfo{
+		name:    name,
+		size:    size,
+		mode:    0o644,
+		modTime: modTime,
+	}
+}
+
 func (i *FileInfo) Name() string               { return i.name }
 func (i *FileInfo) Size() int64                { return i.size }
 func (i *FileInfo) Type() fs.FileMode          { return i.mode }

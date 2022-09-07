@@ -138,11 +138,7 @@ func (f *Fs) Stat(name string) (FileInfo, error) {
 func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error) {
 	// "." and "/" are always directories
 	if cleanPath(name) == "" {
-		return FileInfo{
-			name:    currentDirName,
-			mode:    fs.ModeDir,
-			modTime: time.Now(),
-		}, nil
+		return directoryFileInfo(currentDirName), nil
 	}
 
 	opts := &s3.ListObjectsV2Input{
@@ -167,21 +163,13 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 
 	for _, el := range res.CommonPrefixes {
 		if *el.Prefix == prefixedName+pathSeparator {
-			return FileInfo{
-				name:    cleanPath(name),
-				mode:    fs.ModeDir,
-				modTime: time.Now(),
-			}, nil
+			return directoryFileInfo(cleanPath(name)), nil
 		}
 	}
 
 	for _, el := range res.Contents {
 		if *el.Key == prefixedName {
-			return FileInfo{
-				name:    cleanPath(name),
-				size:    el.Size,
-				modTime: getOrElse(el.LastModified, time.Now),
-			}, nil
+			return regularFileInfo(cleanPath(name), el.Size, getOrElse(el.LastModified, time.Now)), nil
 		}
 	}
 
@@ -205,10 +193,8 @@ func (f *Fs) CreateWithContext(ctx context.Context, name string) (*File, error) 
 	}
 
 	file := &File{
-		fs: f,
-		info: FileInfo{
-			name: cleanPath(name),
-		},
+		fs:   f,
+		info: regularFileInfo(cleanPath(name), 0, time.Now()),
 	}
 
 	return file, file.openWriter(ctx)
@@ -252,12 +238,8 @@ func (f *Fs) CreateDirWithContext(ctx context.Context, name string) (fs.DirEntry
 	}
 
 	dir := &Directory{
-		fs: f,
-		fileInfo: FileInfo{
-			name:    cleanPath(name),
-			mode:    fs.ModeDir,
-			modTime: time.Now(),
-		},
+		fs:       f,
+		fileInfo: directoryFileInfo(cleanPath(name)),
 	}
 
 	return dir, nil
@@ -305,12 +287,8 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 
 	result := []fs.DirEntry{
 		&Directory{
-			fs: f,
-			fileInfo: FileInfo{
-				name:    currentDirName,
-				mode:    fs.ModeDir,
-				modTime: time.Now(),
-			},
+			fs:       f,
+			fileInfo: directoryFileInfo(currentDirName),
 		},
 	}
 
@@ -334,7 +312,7 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 				continue
 			}
 
-			dir, mode := baseName(*p.Prefix)
+			dir, _ := baseName(*p.Prefix)
 
 			if _, found := seenPrefixes[dir]; found {
 				continue
@@ -343,12 +321,8 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 			seenPrefixes[dir] = struct{}{}
 
 			result = append(result, &Directory{
-				fs: f,
-				fileInfo: FileInfo{
-					name:    dir,
-					mode:    mode,
-					modTime: time.Now(),
-				},
+				fs:       f,
+				fileInfo: directoryFileInfo(dir),
 			})
 		}
 
@@ -370,13 +344,8 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 			}
 
 			result = append(result, &File{
-				fs: f,
-				info: FileInfo{
-					name:    name,
-					size:    obj.Size,
-					mode:    mode,
-					modTime: getOrElse(obj.LastModified, time.Now),
-				},
+				fs:   f,
+				info: regularFileInfo(name, obj.Size, getOrElse(obj.LastModified, time.Now)),
 			})
 		}
 	}
