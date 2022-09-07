@@ -16,19 +16,22 @@ import (
 )
 
 const (
-	delimiter     = "/"
-	currentDir    = "."
+	// pathSeparator is prefix separator.
+	pathSeparator = "/"
+	// currentDirName is the directory name entry when listed.
+	currentDirName = "."
+	// directoryFile is a file created to ensure a directory (prefix) exists.
 	directoryFile = ".keep"
-	minPartSize   = 5 * 1024 * 1024
+	// minPartSize is the minimum size allowed in multipart download/uploads.
+	minPartSize = 5 * 1024 * 1024
 )
 
 var (
 	_ fs.FS        = (*Fs)(nil)
 	_ fs.ReadDirFS = (*Fs)(nil)
-
-	ErrDirectory = errors.New("object is a directory")
 )
 
+// Fs is fs.FS S3 filesystem abstraction.
 type Fs struct {
 	client        s3ApiClient
 	bucket        string
@@ -39,13 +42,14 @@ type Fs struct {
 	directoryFile string
 }
 
+// Option is a Fs configuration.
 type Option func(*Fs)
 
 // WithPrefix defines a common prefix inside a bucket.
 func WithPrefix(prefix string) Option {
 	return func(f *Fs) {
 		if s := cleanPath(prefix); s != "" {
-			f.prefix = strings.Trim(s, delimiter)
+			f.prefix = strings.Trim(s, pathSeparator)
 		}
 	}
 }
@@ -135,7 +139,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 	// "." and "/" are always directories
 	if cleanPath(name) == "" {
 		return FileInfo{
-			name:    currentDir,
+			name:    currentDirName,
 			mode:    fs.ModeDir,
 			modTime: time.Now(),
 		}, nil
@@ -144,7 +148,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 	opts := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(f.bucket),
 		Prefix:    aws.String(f.withPrefix(name)),
-		Delimiter: aws.String(delimiter),
+		Delimiter: aws.String(pathSeparator),
 		MaxKeys:   1,
 	}
 
@@ -162,10 +166,9 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 	prefixedName := f.withPrefix(name)
 
 	for _, el := range res.CommonPrefixes {
-		if *el.Prefix == prefixedName+delimiter {
+		if *el.Prefix == prefixedName+pathSeparator {
 			return FileInfo{
 				name:    cleanPath(name),
-				size:    0,
 				mode:    fs.ModeDir,
 				modTime: time.Now(),
 			}, nil
@@ -285,8 +288,8 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 
 	opts := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(f.bucket),
-		Prefix:    aws.String(f.withPrefix(dirName) + delimiter),
-		Delimiter: aws.String(delimiter),
+		Prefix:    aws.String(f.withPrefix(dirName) + pathSeparator),
+		Delimiter: aws.String(pathSeparator),
 	}
 
 	if dirName == "" {
@@ -294,8 +297,8 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 	}
 
 	seenPrefixes := map[string]struct{}{
-		".":       {},
-		delimiter: {},
+		currentDirName: {},
+		pathSeparator:  {},
 	}
 
 	paginator := s3.NewListObjectsV2Paginator(f.client, opts)
@@ -304,7 +307,7 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 		&Directory{
 			fs: f,
 			fileInfo: FileInfo{
-				name:    currentDir,
+				name:    currentDirName,
 				mode:    fs.ModeDir,
 				modTime: time.Now(),
 			},
@@ -355,7 +358,7 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 			}
 
 			name, mode := baseName(*obj.Key)
-			if name == "" || name == delimiter || name == f.directoryFile {
+			if name == "" || name == pathSeparator || name == f.directoryFile {
 				continue
 			}
 
@@ -399,7 +402,7 @@ func (f *Fs) RemoveWithContext(ctx context.Context, fileName string) error {
 	}
 
 	if info.IsDir() {
-		return ErrDirectory
+		return fmt.Errorf("named file is a directory: %w", fs.ErrInvalid)
 	}
 
 	if f.timeout > 0 {
@@ -430,7 +433,7 @@ func (f *Fs) RenameWithContext(ctx context.Context, oldpath, newpath string) err
 	}
 
 	if oldInfo.IsDir() {
-		return fmt.Errorf("oldpath is a directory: %w", ErrDirectory)
+		return fmt.Errorf("oldpath is a directory: %w", fs.ErrInvalid)
 	}
 
 	newInfo, err := f.StatWithContext(ctx, newpath)
@@ -439,7 +442,7 @@ func (f *Fs) RenameWithContext(ctx context.Context, oldpath, newpath string) err
 	}
 
 	if newInfo.IsDir() {
-		return fmt.Errorf("newpath is a directory: %w", ErrDirectory)
+		return fmt.Errorf("newpath is a directory: %w", fs.ErrInvalid)
 	}
 
 	if f.timeout > 0 {
@@ -472,7 +475,7 @@ func (f *Fs) RemoveDirWithContext(ctx context.Context, name string) error {
 		return err
 	}
 
-	if len(entries) == 1 && entries[0].Name() == currentDir {
+	if len(entries) == 1 && entries[0].Name() == currentDirName {
 		return f.Remove(path.Join(name, f.directoryFile))
 	}
 
@@ -488,17 +491,17 @@ func (f *Fs) withPrefix(name ...string) string {
 func cleanPath(name string) string {
 	name = path.Clean(name)
 
-	if name == "." || name == delimiter {
+	if name == currentDirName || name == pathSeparator {
 		return ""
 	}
 
-	return strings.TrimLeft(name, delimiter)
+	return strings.TrimLeft(name, pathSeparator)
 }
 
 func baseName(name string) (string, fs.FileMode) {
 	base := path.Base(name)
 
-	if strings.HasSuffix(name, delimiter) {
+	if strings.HasSuffix(name, pathSeparator) {
 		return base, fs.ModeDir
 	}
 

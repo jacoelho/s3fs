@@ -186,7 +186,7 @@ func TestDirectoryRename(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	err := fsClient.Rename("a", "b")
-	require.ErrorIs(t, err, s3fs.ErrDirectory)
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestDirectoryRemove(t *testing.T) {
@@ -196,7 +196,7 @@ func TestDirectoryRemove(t *testing.T) {
 	fsClient := s3fs.New(client, "test")
 
 	err := fsClient.Remove("a")
-	require.ErrorIs(t, err, s3fs.ErrDirectory)
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestDirectoryCreatedNestedCanBeListed(t *testing.T) {
