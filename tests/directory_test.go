@@ -25,7 +25,7 @@ func TestDirectoryCreate(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 	assert.Equal(t, int64(0), info.Size())
-	assert.Equal(t, fs.ModeDir, info.Mode())
+	assert.True(t, info.Mode()|fs.ModeDir != 0)
 }
 
 func TestDirectoryCreateTwice(t *testing.T) {
