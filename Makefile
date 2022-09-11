@@ -25,3 +25,10 @@ $(GOBIN)/staticcheck:
 .PHONY: staticcheck
 staticcheck: $(GOBIN)/staticcheck
 	$(GOBIN)/staticcheck ./...
+
+$(GOBIN)/fieldalignment:
+	go install golang.org/x/tools/go/analysis/passes/fieldalignment/cmd/fieldalignment@latest
+
+.PHONY: fieldalignment
+fieldalignment: $(GOBIN)/fieldalignment
+	go vet -vettool=$(GOBIN)/fieldalignment ./...

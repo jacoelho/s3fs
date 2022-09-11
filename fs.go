@@ -36,10 +36,10 @@ type Fs struct {
 	client        s3ApiClient
 	bucket        string
 	prefix        string
-	timeout       time.Duration
-	partSize      int64
 	tempDir       string
 	directoryFile string
+	timeout       time.Duration
+	partSize      int64
 }
 
 // Option is a Fs configuration.
