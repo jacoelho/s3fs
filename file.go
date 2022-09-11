@@ -19,15 +19,13 @@ var (
 )
 
 type File struct {
-	fs   *Fs
-	info FileInfo
-
-	offset         int64
 	reader         readerCloserAt
-	readerCancelFn context.CancelFunc
-
 	writer         writerCloserAt
+	fs             *Fs
+	readerCancelFn context.CancelFunc
 	writerCancelFn context.CancelFunc
+	info           FileInfo
+	offset         int64
 }
 
 func (f *File) Name() string               { return f.info.Name() }

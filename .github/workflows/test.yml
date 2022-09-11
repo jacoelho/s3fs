@@ -11,6 +11,7 @@ jobs:
 
       - run: make ci-tidy
       - run: make staticcheck
+      - run: make fieldalignment
       - run: make test-short
       - run: make test
 
