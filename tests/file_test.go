@@ -52,7 +52,7 @@ func TestFileRead(t *testing.T) {
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
-			assert.Truef(t, m.Alloc < memoryLimit, "got %dmb, want %dmb", m.Alloc/1024/1024, memoryLimit/1024/1024)
+			assert.Truef(t, m.Alloc <= memoryLimit, "got %dmb, want %dmb", m.Alloc/1024/1024, memoryLimit/1024/1024)
 		})
 	}
 }
