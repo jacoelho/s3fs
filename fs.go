@@ -145,7 +145,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 		Bucket:    aws.String(f.bucket),
 		Prefix:    aws.String(f.withPrefix(name)),
 		Delimiter: aws.String(pathSeparator),
-		MaxKeys:   1,
+		MaxKeys:   aws.Int32(1),
 	}
 
 	if f.timeout > 0 {
@@ -169,7 +169,7 @@ func (f *Fs) StatWithContext(ctx context.Context, name string) (FileInfo, error)
 
 	for _, el := range res.Contents {
 		if *el.Key == prefixedName {
-			return regularFileInfo(cleanPath(name), el.Size, getOrElse(el.LastModified, time.Now)), nil
+			return regularFileInfo(cleanPath(name), getOrElse(el.Size, zeroInt64), getOrElse(el.LastModified, time.Now)), nil
 		}
 	}
 
@@ -345,7 +345,7 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 
 			result = append(result, &File{
 				fs:   f,
-				info: regularFileInfo(name, obj.Size, getOrElse(obj.LastModified, time.Now)),
+				info: regularFileInfo(name, getOrElse(obj.Size, zeroInt64), getOrElse(obj.LastModified, time.Now)),
 			})
 		}
 	}
@@ -483,3 +483,5 @@ func getOrElse[T any](v *T, fallback func() T) T {
 	}
 	return *v
 }
+
+func zeroInt64() int64 { return 0 }
