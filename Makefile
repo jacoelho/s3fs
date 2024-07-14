@@ -10,7 +10,7 @@ test: compose
  	go test -race -shuffle=on -v ./...
 
 .PHONY: test-short
-test-short:
+test-short: compose
 	cd tests; \
  	go test -race -shuffle=on -short -v ./...
 
