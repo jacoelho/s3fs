@@ -2,8 +2,6 @@ module tests
 
 go 1.21
 
-toolchain go1.23rc1
-
 replace github.com/jacoelho/s3fs => ../
 
 require (
