@@ -5,7 +5,7 @@ GOBIN = $(shell go env GOPATH)/bin
 DATE  = $(shell date +%Y%m%d%H%M%S)
 
 .PHONY: test
-test:
+test: compose
 	cd tests; \
  	go test -race -shuffle=on -v ./...
 
@@ -32,3 +32,7 @@ $(GOBIN)/fieldalignment:
 .PHONY: fieldalignment
 fieldalignment: $(GOBIN)/fieldalignment
 	go vet -vettool=$(GOBIN)/fieldalignment ./...
+
+.PHONY: compose
+compose:
+	docker compose -f tests/docker-compose.yaml up -d

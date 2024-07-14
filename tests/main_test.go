@@ -5,21 +5,19 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/aws/smithy-go/logging"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/aws/smithy-go/logging"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -27,78 +25,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/ory/dockertest/v3"
+	endpoints "github.com/aws/smithy-go/endpoints"
 	"github.com/stretchr/testify/require"
 )
 
-const portEdge = "4566/tcp"
-
-var client *s3.Client
-
-var debug = flag.Bool("debug", false, "debug mode.")
+var (
+	client *s3.Client
+	debug  = flag.Bool("debug", false, "debug mode.")
+)
 
 func TestMain(m *testing.M) {
 	flag.Parse()
 
-	pool, err := dockertest.NewPool("")
-	if err != nil {
-		log.Fatalf("Could not connect to docker: %v", err)
-	}
-
-	resource, err := pool.Run("localstack/localstack", "", []string{
-		"DISABLE_EVENTS=1",
-		"EAGER_SERVICE_LOADING=1",
-		"SERVICES=s3",
-	})
-	if err != nil {
-		log.Fatalf("Could not start resource: %v", err)
-	}
-
-	err = pool.Retry(func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://localhost:%s/_localstack/health", resource.GetPort(portEdge)), nil)
-		if err != nil {
-			return err
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return err
-		}
-
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			return errors.New("not ready")
-		}
-
-		var status localstackHealthResponse
-		if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-			return err
-		}
-
-		if status.Services.S3 != "running" {
-			return errors.New("s3 not running")
-		}
-
-		return nil
-	})
-	if err != nil {
-		log.Fatalf("Could not connect to localstack: %v", err)
-	}
-
 	opts := []func(*config.LoadOptions) error{
 		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("foobar", "foobar", "foobar")),
-		config.WithEndpointResolverWithOptions(aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL:           fmt.Sprintf("http://localhost:%s", resource.GetPort(portEdge)),
-				PartitionID:   "aws",
-				SigningRegion: "us-east-1",
-			}, nil
-		})),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy")),
 	}
 
 	if *debug {
@@ -114,21 +55,32 @@ func TestMain(m *testing.M) {
 
 	client = s3.NewFromConfig(cfg, func(opt *s3.Options) {
 		opt.UsePathStyle = true
+		opt.EndpointResolverV2 = &staticResolverS3{endpoint: "http://localhost:4566"}
 	})
 
 	code := m.Run()
 
-	if err := pool.Purge(resource); err != nil {
-		log.Fatalf("Could not purge resource: %v", err)
-	}
-
 	os.Exit(code)
 }
 
-type localstackHealthResponse struct {
-	Services struct {
-		S3 string `json:"s3"`
-	} `json:"services"`
+type staticResolverS3 struct {
+	endpoint string
+}
+
+func (r *staticResolverS3) ResolveEndpoint(ctx context.Context, params s3.EndpointParameters) (
+	endpoints.Endpoint, error,
+) {
+	u, err := url.Parse(r.endpoint)
+	if err != nil {
+		return endpoints.Endpoint{}, err
+	}
+	endpoint, err := s3.NewDefaultEndpointResolverV2().ResolveEndpoint(ctx, params)
+	if err != nil {
+		return endpoints.Endpoint{}, err
+	}
+	endpoint.URI.Host = u.Host
+	endpoint.URI.Scheme = u.Scheme
+	return endpoint, err
 }
 
 func createBucket(t *testing.T, bucket string) {
