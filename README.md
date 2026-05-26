@@ -6,6 +6,8 @@ Supports handling directories and files transparently, while being memory effici
 
 ## Install
 
+Requires Go 1.26+.
+
 ```bash
 go get -u github.com/jacoelho/s3fs
 ```

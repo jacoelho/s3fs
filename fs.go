@@ -2,12 +2,13 @@ package s3fs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -350,7 +351,9 @@ func (f *Fs) ReadDirWithContext(ctx context.Context, dirName string) ([]fs.DirEn
 		}
 	}
 
-	sort.Slice(result, func(i, j int) bool { return result[i].Name() < result[j].Name() })
+	slices.SortFunc(result, func(a, b fs.DirEntry) int {
+		return cmp.Compare(a.Name(), b.Name())
+	})
 
 	return result, nil
 }
