@@ -15,11 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jacoelho/s3fs"
+	"github.com/jacoelho/s3fs/v2"
 )
 
 // a bit arbitrary value
-const memoryLimit = 25 * 1024 * 1024
+const memoryLimit = 90 * 1024 * 1024
 
 func TestFileRead(t *testing.T) {
 	if testing.Short() {
@@ -33,7 +33,7 @@ func TestFileRead(t *testing.T) {
 	}
 
 	createBucket(t, "test")
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	for i, tc := range fileSizes {
 		t.Run(fmt.Sprintf("file size %d", tc), func(t *testing.T) {
@@ -47,7 +47,7 @@ func TestFileRead(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, sum, sha256sum(t, f))
-			assert.NoError(t, err, f.Close())
+			assert.NoError(t, f.Close())
 
 			runtime.GC()
 
@@ -69,12 +69,12 @@ func TestFileReadChunks(t *testing.T) {
 
 	createBucket(t, "test")
 
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 	checksumSource := createObjectRandomContentsWithSize(t, "test", "file", size)
 	source, err := fsClient.Open("file")
+	require.NoError(t, err)
 	sourceAt, ok := source.(io.ReaderAt)
 	require.True(t, ok)
-	require.NoError(t, err)
 
 	dst, err := os.Create(filepath.Join(t.TempDir(), "file"))
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestFileWrite(t *testing.T) {
 	}
 
 	createBucket(t, "test")
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	for i, tc := range fileSizes {
 		t.Run(fmt.Sprintf("file size %d", tc), func(t *testing.T) {
@@ -138,8 +138,8 @@ func TestFileWrite(t *testing.T) {
 
 			_, err = io.Copy(f, sourceFile)
 			require.NoError(t, err)
-			assert.NoError(t, err, sourceFile.Close())
-			assert.NoError(t, err, f.Close())
+			assert.NoError(t, sourceFile.Close())
+			assert.NoError(t, f.Close())
 			assert.Equal(t, checksum, objectChecksum(t, "test", fileName))
 
 			runtime.GC()
@@ -152,7 +152,7 @@ func TestFileWrite(t *testing.T) {
 	}
 }
 
-func TestFileWriteChunks(t *testing.T) {
+func TestFileWriteChunksSequential(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
@@ -162,34 +162,17 @@ func TestFileWriteChunks(t *testing.T) {
 	sourceAt, checksumSource := createFileWithSize(t, fileSize)
 
 	createBucket(t, "test")
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 	destination, err := fsClient.Create("file")
 	require.NoError(t, err)
 
 	chunks := calculateChunks(fileSize, int64(chunkSize))
 
-	var wg sync.WaitGroup
-	errs := make(chan error, len(chunks))
-
 	for i, c := range chunks {
-		wg.Go(func() {
-			buf := make([]byte, c)
-			_, err := sourceAt.ReadAt(buf, int64(i*chunkSize))
-			if err != nil {
-				errs <- fmt.Errorf("read chunk %d: %w", i, err)
-				return
-			}
-
-			_, err = destination.WriteAt(buf, int64(i*chunkSize))
-			if err != nil {
-				errs <- fmt.Errorf("write chunk %d: %w", i, err)
-			}
-		})
-	}
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
+		buf := make([]byte, c)
+		_, err := sourceAt.ReadAt(buf, int64(i*chunkSize))
+		require.NoError(t, err)
+		_, err = destination.Write(buf)
 		require.NoError(t, err)
 	}
 
@@ -200,38 +183,30 @@ func TestFileWriteChunks(t *testing.T) {
 	assert.NoError(t, sourceAt.Close())
 }
 
-func TestFileReadWhenFileCreatedFails(t *testing.T) {
+func TestFileCreateReturnsWriteOnlyFile(t *testing.T) {
 	createBucket(t, "test")
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 	destination, err := fsClient.Create("file")
 	require.NoError(t, err)
 
-	_, err = destination.Read(make([]byte, 100))
-	require.ErrorIs(t, err, os.ErrClosed)
-}
-
-func TestFileReadAtWhenFileCreatedFails(t *testing.T) {
-	createBucket(t, "test")
-	fsClient := s3fs.New(client, "test")
-	destination, err := fsClient.Create("file")
-	require.NoError(t, err)
-
-	_, err = destination.ReadAt(make([]byte, 100), 0)
-	require.ErrorIs(t, err, os.ErrClosed)
+	_, ok := any(destination).(io.Reader)
+	require.False(t, ok)
+	_, ok = any(destination).(io.ReaderAt)
+	require.False(t, ok)
 }
 
 func TestFileSeek(t *testing.T) {
 	createBucket(t, "test")
 	createObject(t, "test", "file", strings.NewReader("0123456789"))
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	tests := []struct {
 		name       string
+		want       string
 		beforeRead int
 		offset     int64
 		whence     int
 		wantPos    int64
-		want       string
 	}{
 		{
 			name:    "start",
@@ -293,7 +268,7 @@ func TestFileSeek(t *testing.T) {
 func TestFileSeekInvalid(t *testing.T) {
 	createBucket(t, "test")
 	createObject(t, "test", "file", strings.NewReader("0123456789"))
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	tests := []struct {
 		name   string
@@ -335,7 +310,7 @@ func TestFileSeekInvalid(t *testing.T) {
 func TestFileCreateExistingDirectory(t *testing.T) {
 	createBucket(t, "test")
 	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	_, err := fsClient.Create("some-directory/a")
 	require.ErrorIs(t, err, fs.ErrExist)
@@ -344,35 +319,11 @@ func TestFileCreateExistingDirectory(t *testing.T) {
 func TestFileRemove(t *testing.T) {
 	createBucket(t, "test")
 	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
-	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
+	fsClient := newFS(t, s3fs.WithPrefix("some-directory/a"))
 
 	err := fsClient.Remove("test.txt")
 	require.NoError(t, err)
 	assertObjectRemoved(t, "test", "some-directory/a/test.txt")
-}
-
-func TestFileRename(t *testing.T) {
-	createBucket(t, "test")
-	sourceChecksum := createObjectRandomContentsWithSize(t, "test", "some-directory/a/test.txt", 1024)
-	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
-
-	err := fsClient.Rename("test.txt", "new-test.txt")
-
-	require.NoError(t, err)
-	assertObjectRemoved(t, "test", "some-directory/a/test.txt")
-	destinationChecksum := objectChecksum(t, "test", "some-directory/a/new-test.txt")
-	assert.Equal(t, sourceChecksum, destinationChecksum)
-}
-
-func TestFileRenameDirectory(t *testing.T) {
-	createBucket(t, "test")
-	createObject(t, "test", "some-directory/a/test.txt", strings.NewReader(""))
-	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory/a"))
-	_, err := fsClient.CreateDir("b")
-	require.NoError(t, err)
-
-	err = fsClient.Rename("test.txt", "b")
-	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestFileStatHighNumberInRootDirectory(t *testing.T) {
@@ -382,7 +333,7 @@ func TestFileStatHighNumberInRootDirectory(t *testing.T) {
 
 	createBucket(t, "test")
 	files := createObjects(t, "test", "", "example", 1000)
-	fsClient := s3fs.New(client, "test")
+	fsClient := newFS(t)
 
 	info, err := fsClient.Stat(files[len(files)-1])
 
@@ -397,7 +348,7 @@ func TestFileStatHighNumberInNestedDirectory(t *testing.T) {
 
 	createBucket(t, "test")
 	files := createObjects(t, "test", "some-directory", "example", 1500)
-	fsClient := s3fs.New(client, "test", s3fs.WithPrefix("some-directory"))
+	fsClient := newFS(t, s3fs.WithPrefix("some-directory"))
 
 	info, err := fsClient.Stat(files[len(files)-1])
 
