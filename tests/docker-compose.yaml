@@ -1,6 +1,6 @@
 services:
   localstack:
-    image: localstack/localstack:latest
+    image: localstack/localstack:3.0.2
     environment:
       - DISABLE_EVENTS=1
       - SERVICES=s3

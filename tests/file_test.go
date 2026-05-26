@@ -49,6 +49,8 @@ func TestFileRead(t *testing.T) {
 			assert.Equal(t, sum, sha256sum(t, f))
 			assert.NoError(t, err, f.Close())
 
+			runtime.GC()
+
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
@@ -139,6 +141,8 @@ func TestFileWrite(t *testing.T) {
 			assert.NoError(t, err, sourceFile.Close())
 			assert.NoError(t, err, f.Close())
 			assert.Equal(t, checksum, objectChecksum(t, "test", fileName))
+
+			runtime.GC()
 
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
