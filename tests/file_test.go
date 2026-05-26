@@ -49,6 +49,8 @@ func TestFileRead(t *testing.T) {
 			assert.Equal(t, sum, sha256sum(t, f))
 			assert.NoError(t, err, f.Close())
 
+			runtime.GC()
+
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
@@ -80,21 +82,29 @@ func TestFileReadChunks(t *testing.T) {
 	chunks := calculateChunks(size, int64(chunkSize))
 
 	var wg sync.WaitGroup
-	wg.Add(len(chunks))
+	errs := make(chan error, len(chunks))
 
 	for i, c := range chunks {
-		go func(t *testing.T, i, chunk int) {
-			defer wg.Done()
-
-			buf := make([]byte, chunk)
+		wg.Go(func() {
+			buf := make([]byte, c)
 			_, err := sourceAt.ReadAt(buf, int64(i*chunkSize))
-			require.NoError(t, err)
+			if err != nil {
+				errs <- fmt.Errorf("read chunk %d: %w", i, err)
+				return
+			}
 
 			_, err = dst.WriteAt(buf, int64(i*chunkSize))
-			require.NoError(t, err)
-		}(t, i, c)
+			if err != nil {
+				errs <- fmt.Errorf("write chunk %d: %w", i, err)
+			}
+		})
 	}
 	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
 
 	checksumDestination := fileChecksum(t, dst)
 	assert.Equal(t, checksumSource, checksumDestination)
@@ -132,6 +142,8 @@ func TestFileWrite(t *testing.T) {
 			assert.NoError(t, err, f.Close())
 			assert.Equal(t, checksum, objectChecksum(t, "test", fileName))
 
+			runtime.GC()
+
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
 
@@ -157,21 +169,30 @@ func TestFileWriteChunks(t *testing.T) {
 	chunks := calculateChunks(fileSize, int64(chunkSize))
 
 	var wg sync.WaitGroup
-	wg.Add(len(chunks))
+	errs := make(chan error, len(chunks))
 
 	for i, c := range chunks {
-		go func(t *testing.T, i, chunk int) {
-			defer wg.Done()
-
-			buf := make([]byte, chunk)
+		wg.Go(func() {
+			buf := make([]byte, c)
 			_, err := sourceAt.ReadAt(buf, int64(i*chunkSize))
-			require.NoError(t, err)
+			if err != nil {
+				errs <- fmt.Errorf("read chunk %d: %w", i, err)
+				return
+			}
 
 			_, err = destination.WriteAt(buf, int64(i*chunkSize))
-			require.NoError(t, err)
-		}(t, i, c)
+			if err != nil {
+				errs <- fmt.Errorf("write chunk %d: %w", i, err)
+			}
+		})
 	}
 	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
 	require.NoError(t, destination.Close())
 
 	checksumDestination := objectChecksum(t, "test", "file")
@@ -197,6 +218,118 @@ func TestFileReadAtWhenFileCreatedFails(t *testing.T) {
 
 	_, err = destination.ReadAt(make([]byte, 100), 0)
 	require.ErrorIs(t, err, os.ErrClosed)
+}
+
+func TestFileSeek(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "file", strings.NewReader("0123456789"))
+	fsClient := s3fs.New(client, "test")
+
+	tests := []struct {
+		name       string
+		beforeRead int
+		offset     int64
+		whence     int
+		wantPos    int64
+		want       string
+	}{
+		{
+			name:    "start",
+			offset:  4,
+			whence:  io.SeekStart,
+			wantPos: 4,
+			want:    "456789",
+		},
+		{
+			name:       "current",
+			beforeRead: 2,
+			offset:     3,
+			whence:     io.SeekCurrent,
+			wantPos:    5,
+			want:       "56789",
+		},
+		{
+			name:    "end negative offset",
+			offset:  -3,
+			whence:  io.SeekEnd,
+			wantPos: 7,
+			want:    "789",
+		},
+		{
+			name:    "end",
+			offset:  0,
+			whence:  io.SeekEnd,
+			wantPos: 10,
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := fsClient.Open("file")
+			require.NoError(t, err)
+			defer func() { assert.NoError(t, f.Close()) }()
+
+			if tt.beforeRead > 0 {
+				buf := make([]byte, tt.beforeRead)
+				_, err = io.ReadFull(f, buf)
+				require.NoError(t, err)
+			}
+
+			seeker, ok := f.(io.Seeker)
+			require.True(t, ok)
+
+			pos, err := seeker.Seek(tt.offset, tt.whence)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantPos, pos)
+
+			got, err := io.ReadAll(f)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
+func TestFileSeekInvalid(t *testing.T) {
+	createBucket(t, "test")
+	createObject(t, "test", "file", strings.NewReader("0123456789"))
+	fsClient := s3fs.New(client, "test")
+
+	tests := []struct {
+		name   string
+		offset int64
+		whence int
+	}{
+		{
+			name:   "before start",
+			offset: -1,
+			whence: io.SeekStart,
+		},
+		{
+			name:   "past end",
+			offset: 1,
+			whence: io.SeekEnd,
+		},
+		{
+			name:   "invalid whence",
+			offset: 0,
+			whence: 99,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := fsClient.Open("file")
+			require.NoError(t, err)
+			defer func() { assert.NoError(t, f.Close()) }()
+
+			seeker, ok := f.(io.Seeker)
+			require.True(t, ok)
+
+			_, err = seeker.Seek(tt.offset, tt.whence)
+			require.ErrorIs(t, err, fs.ErrInvalid)
+		})
+	}
 }
 
 func TestFileCreateExistingDirectory(t *testing.T) {

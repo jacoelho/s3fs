@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/aws/smithy-go/logging"
 	"io"
 	"log"
 	"net/http"
@@ -26,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	endpoints "github.com/aws/smithy-go/endpoints"
+	"github.com/aws/smithy-go/logging"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +86,7 @@ func (r *staticResolverS3) ResolveEndpoint(ctx context.Context, params s3.Endpoi
 func createBucket(t *testing.T, bucket string) {
 	t.Helper()
 
-	_, err := client.CreateBucket(context.Background(), &s3.CreateBucketInput{
+	_, err := client.CreateBucket(t.Context(), &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	if err != nil {
@@ -142,7 +142,7 @@ func deleteBucket(t *testing.T, bucket string) {
 func createObject(t *testing.T, bucket, path string, body io.Reader) {
 	t.Helper()
 
-	_, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+	_, err := client.PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(path),
 		Body:   body,
@@ -157,10 +157,10 @@ func createObjects(t *testing.T, bucket, dirName, filePrefix string, count int) 
 
 	result := make([]string, count)
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		fileName := fmt.Sprintf("%s_%000000d.txt", filePrefix, i)
 
-		_, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+		_, err := client.PutObject(t.Context(), &s3.PutObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(path.Join(dirName, fileName)),
 			Body:   strings.NewReader("data"),
@@ -178,7 +178,7 @@ func createObjects(t *testing.T, bucket, dirName, filePrefix string, count int) 
 func assertObjectRemoved(t *testing.T, bucket, path string) {
 	t.Helper()
 
-	_, err := client.HeadObject(context.Background(), &s3.HeadObjectInput{
+	_, err := client.HeadObject(t.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(path),
 	})
@@ -235,7 +235,7 @@ func fileChecksum(t *testing.T, f *os.File) string {
 func objectChecksum(t *testing.T, bucket, path string) string {
 	t.Helper()
 
-	resp, err := client.GetObject(context.Background(), &s3.GetObjectInput{
+	resp, err := client.GetObject(t.Context(), &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(path),
 	})
@@ -264,8 +264,7 @@ func isErrNotFound(err error) bool {
 		return false
 	}
 
-	var re *awshttp.ResponseError
-	if errors.As(err, &re) && re.Response != nil {
+	if re, ok := errors.AsType[*awshttp.ResponseError](err); ok && re.Response != nil {
 		return re.Response.StatusCode == http.StatusNotFound
 	}
 

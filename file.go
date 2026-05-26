@@ -7,7 +7,8 @@ import (
 	"io/fs"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
+	transfertypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/eikenb/pipeat"
 )
@@ -71,7 +72,10 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 		start = f.offset + offset
 
 	case io.SeekEnd:
-		start = f.info.Size() - offset
+		start = f.info.Size() + offset
+
+	default:
+		return 0, &fs.PathError{Op: "seek", Path: f.info.name, Err: fs.ErrInvalid}
 	}
 
 	if start < 0 || start > f.info.Size() {
@@ -98,24 +102,12 @@ func (f *File) openReaderAt(ctx context.Context, offset int64) error {
 	}
 
 	ctx, cancelFn := context.WithCancel(ctx)
-	downloader := manager.NewDownloader(f.fs.client, func(d *manager.Downloader) {
-		d.Concurrency = 1
-		d.PartSize = f.fs.partSize
-	})
-
-	var streamRange *string
-	if offset > 0 {
-		streamRange = aws.String(fmt.Sprintf("bytes=%d-", offset))
-	}
+	transferClient := f.transferClient()
 
 	go func() {
 		defer cancelFn()
 
-		_, err := downloader.Download(ctx, w, &s3.GetObjectInput{
-			Bucket: aws.String(f.fs.bucket),
-			Key:    aws.String(f.fs.withPrefix(f.Name())),
-			Range:  streamRange,
-		})
+		err := f.downloadAt(ctx, transferClient, w, offset)
 		_ = w.CloseWithError(err)
 	}()
 
@@ -133,15 +125,12 @@ func (f *File) openWriter(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
-	uploader := manager.NewUploader(f.fs.client, func(u *manager.Uploader) {
-		u.Concurrency = 1
-		u.PartSize = f.fs.partSize
-	})
+	transferClient := f.transferClient()
 
 	go func() {
 		defer cancel()
 
-		_, err := uploader.Upload(ctx, &s3.PutObjectInput{
+		_, err := transferClient.UploadObject(ctx, &transfermanager.UploadObjectInput{
 			Bucket: aws.String(f.fs.bucket),
 			Key:    aws.String(f.fs.withPrefix(f.Name())),
 			Body:   r,
@@ -153,6 +142,50 @@ func (f *File) openWriter(ctx context.Context) error {
 	f.writerCancelFn = cancel
 
 	return nil
+}
+
+func (f *File) transferClient() *transfermanager.Client {
+	return transfermanager.New(f.fs.client, func(o *transfermanager.Options) {
+		o.Concurrency = 1
+		o.PartSizeBytes = f.fs.partSize
+		o.MultipartUploadThreshold = f.fs.partSize
+		o.GetObjectType = transfertypes.GetObjectRanges
+	})
+}
+
+func (f *File) downloadAt(ctx context.Context, client *transfermanager.Client, w io.WriterAt, offset int64) error {
+	if offset >= f.info.Size() {
+		return nil
+	}
+
+	if offset == 0 {
+		_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
+			Bucket:   aws.String(f.fs.bucket),
+			Key:      aws.String(f.fs.withPrefix(f.Name())),
+			WriterAt: w,
+		})
+		return err
+	}
+
+	writer, ok := w.(io.Writer)
+	if !ok {
+		return fmt.Errorf("range download writer missing io.Writer: %w", fs.ErrInvalid)
+	}
+
+	res, err := f.fs.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(f.fs.bucket),
+		Key:    aws.String(f.fs.withPrefix(f.Name())),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-", offset)),
+	})
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(writer, res.Body)
+	if closeErr := res.Body.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // Write implements io.Writer interface.
