@@ -1,230 +1,257 @@
 package s3fs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
-	transfertypes "github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/eikenb/pipeat"
 )
 
 var (
-	_ fs.File        = (*File)(nil)
-	_ fs.DirEntry    = (*File)(nil)
-	_ writerCloserAt = (*File)(nil)
+	_ fs.File     = (*File)(nil)
+	_ io.ReaderAt = (*File)(nil)
+	_ io.Seeker   = (*File)(nil)
 )
 
 type File struct {
-	reader         readerCloserAt
-	writer         writerCloserAt
-	fs             *Fs
-	readerCancelFn context.CancelFunc
-	writerCancelFn context.CancelFunc
-	info           FileInfo
-	offset         int64
+	mu      sync.Mutex
+	fs      *Fs
+	info    FileInfo
+	key     string
+	body    io.ReadCloser
+	offset  int64
+	readErr error
+	closed  bool
 }
 
-func (f *File) Name() string               { return f.info.Name() }
-func (f *File) IsDir() bool                { return f.info.IsDir() }
-func (f *File) Type() fs.FileMode          { return f.info.Type() }
-func (f *File) Info() (fs.FileInfo, error) { return f.info.Info() }
-func (f *File) Stat() (fs.FileInfo, error) { return &f.info, nil }
+func newFile(ctx context.Context, fsys *Fs, info FileInfo, key string) (*File, error) {
+	f := &File{fs: fsys, info: info, key: key}
+	if err := f.openAt(ctx, 0); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
 
-func (f *File) Read(b []byte) (int, error) {
-	if f.reader == nil {
-		return 0, fmt.Errorf("file not open for reading: %w", fs.ErrClosed)
+func (f *File) Stat() (fs.FileInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.closed {
+		return nil, pathError("stat", f.info.path, fs.ErrClosed)
+	}
+	return f.info, nil
+}
+
+func (f *File) Read(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.closed {
+		return 0, pathError("read", f.info.path, fs.ErrClosed)
+	}
+	if f.body == nil {
+		if f.readErr != nil && f.offset < f.info.Size() {
+			return 0, f.readErr
+		}
+		return 0, io.EOF
 	}
 
-	n, err := f.reader.Read(b)
-	if err != nil {
-		return n, err
-	}
-
+	n, err := f.body.Read(p)
 	f.offset += int64(n)
-
-	return n, nil
+	if err != nil {
+		_ = f.body.Close()
+		f.body = nil
+		if err != io.EOF {
+			err = pathError("read", f.info.path, err)
+			f.readErr = err
+		} else {
+			f.offset = f.info.Size()
+			f.readErr = nil
+		}
+	}
+	return n, err
 }
 
-func (f *File) ReadAt(b []byte, offset int64) (int, error) {
-	if f.reader == nil {
-		return 0, fmt.Errorf("file not open for reading: %w", fs.ErrClosed)
+func (f *File) ReadAt(p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
 	}
-	return f.reader.ReadAt(b, offset)
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return 0, pathError("readat", f.info.path, fs.ErrClosed)
+	}
+	info := f.info
+	key := f.key
+	fsys := f.fs
+	f.mu.Unlock()
+
+	if off < 0 {
+		return 0, pathError("readat", info.path, fs.ErrInvalid)
+	}
+	if off >= info.Size() {
+		return 0, io.EOF
+	}
+
+	readSize := min(int64(len(p)), info.Size()-off)
+	end := off + readSize - 1
+	opCtx, cancel := fsys.operationContext(context.Background())
+	defer cancel()
+
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(fsys.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", off, end)),
+	}
+	if info.etag != "" {
+		input.IfMatch = aws.String(info.etag)
+	}
+
+	out, err := fsys.client.GetObject(opCtx, input)
+	if err != nil {
+		return 0, pathError("readat", info.path, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+
+	n, err := io.ReadFull(out.Body, p[:readSize])
+	if err == io.ErrUnexpectedEOF {
+		err = io.EOF
+	}
+	if err != nil && err != io.EOF {
+		err = pathError("readat", info.path, err)
+	}
+	if n < len(p) && err == nil {
+		err = io.EOF
+	}
+	return n, err
 }
 
 func (f *File) Seek(offset int64, whence int) (int64, error) {
-	if f.reader == nil {
-		return 0, fmt.Errorf("seek only supported for reading: %w", fs.ErrClosed)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.closed {
+		return 0, pathError("seek", f.info.path, fs.ErrClosed)
 	}
 
-	var start int64
-
+	var next int64
+	var ok bool
 	switch whence {
 	case io.SeekStart:
-		start = offset
-
+		next = offset
+		ok = true
 	case io.SeekCurrent:
-		start = f.offset + offset
-
+		next, ok = addOffset(f.offset, offset)
 	case io.SeekEnd:
-		start = f.info.Size() + offset
-
+		next, ok = addOffset(f.info.Size(), offset)
 	default:
-		return 0, &fs.PathError{Op: "seek", Path: f.info.name, Err: fs.ErrInvalid}
+		return 0, pathError("seek", f.info.path, fs.ErrInvalid)
+	}
+	if !ok || next < 0 || next > f.info.Size() {
+		return 0, pathError("seek", f.info.path, fs.ErrInvalid)
+	}
+	if next == f.offset && (f.body != nil || next == f.info.Size()) {
+		return next, nil
 	}
 
-	if start < 0 || start > f.info.Size() {
-		return 0, &fs.PathError{Op: "seek", Path: f.info.name, Err: fs.ErrInvalid}
-	}
-
-	return start, f.openReaderAt(context.Background(), start)
-}
-
-func (f *File) openReaderAt(ctx context.Context, offset int64) error {
-	if f.readerCancelFn != nil {
-		f.readerCancelFn()
-	}
-
-	if f.reader != nil {
-		if err := f.Close(); err != nil {
-			return err
-		}
-	}
-
-	r, w, err := pipeat.PipeInDir(f.fs.tempDir)
+	body, err := f.bodyAt(context.Background(), "seek", next)
 	if err != nil {
-		return err
+		return 0, err
 	}
-
-	ctx, cancelFn := context.WithCancel(ctx)
-	transferClient := f.transferClient()
-
-	go func() {
-		defer cancelFn()
-
-		err := f.downloadAt(ctx, transferClient, w, offset)
-		_ = w.CloseWithError(err)
-	}()
-
-	f.offset = offset
-	f.reader = r
-	f.readerCancelFn = cancelFn
-
-	return nil
-}
-
-func (f *File) openWriter(ctx context.Context) error {
-	r, w, err := pipeat.PipeInDir(f.fs.tempDir)
-	if err != nil {
-		return err
+	if err := f.closeBody(); err != nil {
+		_ = body.Close()
+		return 0, err
 	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	transferClient := f.transferClient()
-
-	go func() {
-		defer cancel()
-
-		_, err := transferClient.UploadObject(ctx, &transfermanager.UploadObjectInput{
-			Bucket: aws.String(f.fs.bucket),
-			Key:    aws.String(f.fs.withPrefix(f.Name())),
-			Body:   r,
-		})
-		_ = r.CloseWithError(err)
-	}()
-
-	f.writer = w
-	f.writerCancelFn = cancel
-
-	return nil
+	f.body = body
+	f.offset = next
+	f.readErr = nil
+	return next, nil
 }
 
-func (f *File) transferClient() *transfermanager.Client {
-	return transfermanager.New(f.fs.client, func(o *transfermanager.Options) {
-		o.Concurrency = 1
-		o.PartSizeBytes = f.fs.partSize
-		o.MultipartUploadThreshold = f.fs.partSize
-		o.GetObjectType = transfertypes.GetObjectRanges
-	})
-}
+func (f *File) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-func (f *File) downloadAt(ctx context.Context, client *transfermanager.Client, w io.WriterAt, offset int64) error {
-	if offset >= f.info.Size() {
+	if f.closed {
 		return nil
 	}
+	f.closed = true
+	return f.closeBody()
+}
 
-	if offset == 0 {
-		_, err := client.DownloadObject(ctx, &transfermanager.DownloadObjectInput{
-			Bucket:   aws.String(f.fs.bucket),
-			Key:      aws.String(f.fs.withPrefix(f.Name())),
-			WriterAt: w,
-		})
-		return err
-	}
-
-	writer, ok := w.(io.Writer)
-	if !ok {
-		return fmt.Errorf("range download writer missing io.Writer: %w", fs.ErrInvalid)
-	}
-
-	res, err := f.fs.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(f.fs.bucket),
-		Key:    aws.String(f.fs.withPrefix(f.Name())),
-		Range:  aws.String(fmt.Sprintf("bytes=%d-", offset)),
-	})
+func (f *File) openAt(ctx context.Context, offset int64) error {
+	body, err := f.bodyAt(ctx, "open", offset)
 	if err != nil {
 		return err
 	}
-
-	_, err = io.Copy(writer, res.Body)
-	if closeErr := res.Body.Close(); err == nil {
-		err = closeErr
-	}
-	return err
-}
-
-// Write implements io.Writer interface.
-func (f *File) Write(p []byte) (n int, err error) {
-	if f.writer == nil {
-		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
-	}
-	return f.writer.Write(p)
-}
-
-// WriteAt implements io.WriterAt interface.
-func (f *File) WriteAt(p []byte, off int64) (n int, err error) {
-	if f.writer == nil {
-		return 0, fmt.Errorf("file not open for writing: %w", fs.ErrClosed)
-	}
-	return f.writer.WriteAt(p, off)
-}
-
-// Close implements io.Closer interface.
-func (f *File) Close() error {
-	if f.reader != nil {
-		if err := f.reader.Close(); err != nil {
-			return err
-		}
-	}
-
-	if f.readerCancelFn != nil {
-		f.readerCancelFn()
-	}
-
-	if f.writer != nil {
-		if err := f.writer.Close(); err != nil {
-			return err
-		}
-	}
-
-	if f.writerCancelFn != nil {
-		f.writerCancelFn()
-	}
-
+	f.body = body
+	f.offset = offset
+	f.readErr = nil
 	return nil
+}
+
+func (f *File) bodyAt(ctx context.Context, op string, offset int64) (io.ReadCloser, error) {
+	if offset >= f.info.Size() {
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
+
+	opCtx, cancel := f.fs.operationContext(ctx)
+
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(f.fs.bucket),
+		Key:    aws.String(f.key),
+	}
+	if offset > 0 {
+		input.Range = aws.String(fmt.Sprintf("bytes=%d-", offset))
+	}
+	if f.info.etag != "" {
+		input.IfMatch = aws.String(f.info.etag)
+	}
+
+	out, err := f.fs.client.GetObject(opCtx, input)
+	if err != nil {
+		cancel()
+		return nil, pathError(op, f.info.path, err)
+	}
+	return &cancelOnClose{ReadCloser: out.Body, cancel: cancel}, nil
+}
+
+func addOffset(base, delta int64) (int64, bool) {
+	if delta > 0 && base > math.MaxInt64-delta {
+		return 0, false
+	}
+	if delta < 0 && base < math.MinInt64-delta {
+		return 0, false
+	}
+	return base + delta, true
+}
+
+func (f *File) closeBody() error {
+	if f.body == nil {
+		return nil
+	}
+	err := f.body.Close()
+	f.body = nil
+	if err != nil {
+		return pathError("close", f.info.path, err)
+	}
+	return nil
+}
+
+type cancelOnClose struct {
+	io.ReadCloser
+	once   sync.Once
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnClose) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(r.cancel)
+	return err
 }

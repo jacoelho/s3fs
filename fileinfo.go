@@ -6,34 +6,37 @@ import (
 )
 
 type FileInfo struct {
-	modTime time.Time
 	name    string
+	path    string
 	size    int64
 	mode    fs.FileMode
+	modTime time.Time
+	etag    string
 }
 
-func directoryFileInfo(name string) FileInfo {
+func directoryFileInfo(name, fullPath string) FileInfo {
 	return FileInfo{
-		name:    name,
-		mode:    0o755 | fs.ModeDir,
-		modTime: time.Now(),
+		name: name,
+		path: fullPath,
+		mode: 0o755 | fs.ModeDir,
 	}
 }
 
-func regularFileInfo(name string, size int64, modTime time.Time) FileInfo {
+func regularFileInfo(name, fullPath string, size int64, modTime time.Time, etag string) FileInfo {
 	return FileInfo{
 		name:    name,
+		path:    fullPath,
 		size:    size,
 		mode:    0o644,
 		modTime: modTime,
+		etag:    etag,
 	}
 }
 
-func (i *FileInfo) Name() string               { return i.name }
-func (i *FileInfo) Size() int64                { return i.size }
-func (i *FileInfo) Type() fs.FileMode          { return i.mode }
-func (i *FileInfo) ModTime() time.Time         { return i.modTime }
-func (i *FileInfo) IsDir() bool                { return i.mode&fs.ModeDir != 0 }
-func (i *FileInfo) Sys() any                   { return nil }
-func (i *FileInfo) Info() (fs.FileInfo, error) { return i, nil }
-func (i *FileInfo) Mode() fs.FileMode          { return i.mode }
+func (i FileInfo) Name() string       { return i.name }
+func (i FileInfo) Size() int64        { return i.size }
+func (i FileInfo) Mode() fs.FileMode  { return i.mode }
+func (i FileInfo) ModTime() time.Time { return i.modTime }
+func (i FileInfo) IsDir() bool        { return i.mode.IsDir() }
+func (i FileInfo) Sys() any           { return nil }
+func (i FileInfo) Type() fs.FileMode  { return i.mode.Type() }
