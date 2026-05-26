@@ -6,12 +6,12 @@ import (
 )
 
 type FileInfo struct {
+	modTime time.Time
 	name    string
 	path    string
+	etag    string
 	size    int64
 	mode    fs.FileMode
-	modTime time.Time
-	etag    string
 }
 
 func directoryFileInfo(name, fullPath string) FileInfo {

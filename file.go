@@ -20,13 +20,13 @@ var (
 )
 
 type File struct {
-	mu      sync.Mutex
-	fs      *Fs
-	info    FileInfo
-	key     string
 	body    io.ReadCloser
-	offset  int64
 	readErr error
+	fs      *Fs
+	key     string
+	info    FileInfo
+	offset  int64
+	mu      sync.Mutex
 	closed  bool
 }
 
@@ -246,8 +246,8 @@ func (f *File) closeBody() error {
 
 type cancelOnClose struct {
 	io.ReadCloser
-	once   sync.Once
 	cancel context.CancelFunc
+	once   sync.Once
 }
 
 func (r *cancelOnClose) Close() error {

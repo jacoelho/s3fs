@@ -8,10 +8,10 @@ import (
 
 func TestNormalizePath(t *testing.T) {
 	tests := []struct {
-		name      string
-		allowRoot bool
-		want      logicalPath
 		wantErr   error
+		name      string
+		want      logicalPath
+		allowRoot bool
 	}{
 		{name: ".", allowRoot: true, want: ""},
 		{name: "", allowRoot: true, wantErr: fs.ErrInvalid},

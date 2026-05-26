@@ -15,11 +15,11 @@ var (
 const maxReadDirBatch = 64
 
 type Directory struct {
-	mu     sync.Mutex
 	fs     *Fs
-	info   FileInfo
-	path   logicalPath
 	cursor *dirCursor
+	path   logicalPath
+	info   FileInfo
+	mu     sync.Mutex
 	closed bool
 }
 

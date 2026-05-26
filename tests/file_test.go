@@ -202,11 +202,11 @@ func TestFileSeek(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		want       string
 		beforeRead int
 		offset     int64
 		whence     int
 		wantPos    int64
-		want       string
 	}{
 		{
 			name:    "start",

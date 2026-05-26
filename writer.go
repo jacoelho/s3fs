@@ -17,22 +17,18 @@ import (
 var _ io.WriteCloser = (*Writer)(nil)
 
 type Writer struct {
-	mu sync.Mutex
-
-	cfg writerConfig
-	ctx context.Context
-
-	buf       []byte
-	total     int64
-	uploadID  *string
-	nextPart  int32
-	completed []types.CompletedPart
-
-	state       writerState
+	ctx         context.Context
 	failureErr  error
 	terminalErr error
-
+	uploadID    *string
+	buf         []byte
+	completed   []types.CompletedPart
+	cfg         writerConfig
+	total       int64
 	releaseOnce sync.Once
+	mu          sync.Mutex
+	nextPart    int32
+	state       writerState
 }
 
 type writerState uint8
@@ -47,14 +43,14 @@ const (
 
 type writerConfig struct {
 	client           s3ApiClient
+	operationContext func(context.Context) (context.Context, context.CancelFunc)
+	cleanupContext   func() (context.Context, context.CancelFunc)
+	release          func()
 	bucket           string
 	key              string
 	path             string
 	partSize         int64
 	maxWriteSize     int64
-	operationContext func(context.Context) (context.Context, context.CancelFunc)
-	cleanupContext   func() (context.Context, context.CancelFunc)
-	release          func()
 }
 
 func newWriter(ctx context.Context, cfg writerConfig) *Writer {

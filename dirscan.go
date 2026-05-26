@@ -103,23 +103,23 @@ const (
 )
 
 type dirItem struct {
-	kind  dirItemKind
 	key   string
 	entry dirEntry
+	kind  dirItemKind
 }
 
 type dirPage struct {
-	items []dirItem
 	next  *string
+	items []dirItem
 }
 
 type dirCursor struct {
 	fs         *Fs
-	path       logicalPath
 	token      *string
+	path       logicalPath
 	items      []dirItem
-	index      int
 	pending    dirEntry
+	index      int
 	hasPending bool
 	seen       bool
 	done       bool

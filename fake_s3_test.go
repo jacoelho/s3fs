@@ -22,34 +22,34 @@ import (
 )
 
 type fakeS3 struct {
-	mu       sync.Mutex
+	readErr  error
 	objects  map[string]fakeObject
 	uploads  map[string]*fakeUpload
-	nextID   int
 	failures map[string][]error
 	calls    []fakeCall
+	nextID   int
 	closes   int
 	pageSize int
-	readErr  error
+	mu       sync.Mutex
 	readCtx  bool
 }
 
 type fakeObject struct {
-	body    []byte
-	etag    string
 	modTime time.Time
+	etag    string
+	body    []byte
 }
 
 type fakeUpload struct {
-	key      string
 	parts    map[int32]fakePart
-	aborted  bool
+	key      string
 	checksum types.ChecksumAlgorithm
+	aborted  bool
 }
 
 type fakePart struct {
-	body []byte
 	out  s3.UploadPartOutput
+	body []byte
 }
 
 type fakeCall struct {
@@ -57,11 +57,11 @@ type fakeCall struct {
 	key       string
 	rangeHdr  string
 	ifMatch   string
-	part      int32
-	size      int64
 	checksum  types.ChecksumAlgorithm
 	uploadID  string
 	completed []types.CompletedPart
+	size      int64
+	part      int32
 }
 
 func newFakeS3() *fakeS3 {
@@ -443,8 +443,8 @@ func (i listItem) value() string {
 
 type trackedReadCloser struct {
 	io.Reader
-	closed  bool
 	onClose func()
+	closed  bool
 }
 
 type errReader struct {

@@ -35,17 +35,16 @@ var (
 
 // Fs is an S3-backed io/fs filesystem.
 type Fs struct {
-	client          s3ApiClient
-	bucket          string
-	prefix          string
-	directoryFile   string
-	timeout         time.Duration
-	partSize        int64
-	maxWriteSize    int64
-	maxWriteSizeSet bool
-
-	maxActiveWriters int
+	client           s3ApiClient
 	writerSlots      chan struct{}
+	bucket           string
+	prefix           string
+	directoryFile    string
+	timeout          time.Duration
+	partSize         int64
+	maxWriteSize     int64
+	maxActiveWriters int
+	maxWriteSizeSet  bool
 }
 
 // Open opens name for reading.
