@@ -48,10 +48,10 @@ func TestS3ConformanceListRangeAndMPU(t *testing.T) {
 		key string
 		raw string
 	}{
-		{key: "dir/space name.txt", raw: "dir%2Fspace%20name.txt"},
-		{key: "dir/plus+name.txt", raw: "dir%2Fplus%2Bname.txt"},
-		{key: "dir/percent%name.txt", raw: "dir%2Fpercent%25name.txt"},
-		{key: "dir/café.txt", raw: "dir%2Fcaf%C3%A9.txt"},
+		{key: "dir/space name.txt", raw: "dir/space%20name.txt"},
+		{key: "dir/plus+name.txt", raw: "dir/plus%2Bname.txt"},
+		{key: "dir/percent%name.txt", raw: "dir/percent%25name.txt"},
+		{key: "dir/café.txt", raw: "dir/caf%C3%A9.txt"},
 	} {
 		require.Contains(t, rawKeys, tt.raw)
 		decoded, err := url.PathUnescape(tt.raw)
@@ -62,7 +62,7 @@ func TestS3ConformanceListRangeAndMPU(t *testing.T) {
 	for _, prefix := range all.CommonPrefixes {
 		rawPrefixes = append(rawPrefixes, aws.ToString(prefix.Prefix))
 	}
-	require.Contains(t, rawPrefixes, "dir%2Fsub%2F")
+	require.Contains(t, rawPrefixes, "dir/sub/")
 
 	head, err := client.HeadObject(t.Context(), &s3.HeadObjectInput{
 		Bucket: aws.String("test"),
